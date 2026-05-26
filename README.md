@@ -122,10 +122,10 @@ See `patterns.sample.txt` for a worked example.
   prefilters were skipped because consumer AVX-512 support is inconsistent and Teddy lacks
   wildcard support, which the rare-byte AVX2 prefilter already covers.
 
-Indicative throughput (`cargo run --release --example throughput`, 8 MiB code-like buffer):
-the rarest-byte anchor scans at **~28 GB/s**, versus **~0.8 GB/s** when forced onto a common
-byte like `0x48` — about a **35x** difference, which is exactly why the anchor heuristic
-exists. `cargo bench` runs the criterion version with full statistics.
+Measured throughput (criterion `cargo bench`, 8 MiB code-like buffer): the rarest-byte anchor
+scans at **~29 GiB/s**, versus **~0.8 GiB/s** when forced onto a common byte like `0x48` —
+about a **37x** difference, which is exactly why the anchor heuristic exists.
+(`cargo run --release --example throughput` is a dependency-light equivalent.)
 
 ## License
 
