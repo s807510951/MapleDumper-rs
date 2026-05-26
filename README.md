@@ -3,7 +3,7 @@
 [![CI](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml)
 
 A fast AOB / pattern scanner and offset dumper for Windows x64 (and x86) processes. MapleDumper
-attaches to a running process, scans a target module with an AVX2-accelerated masked matcher,
+attaches to a running process, scans the target module with an AVX2-accelerated masked matcher,
 resolves the matches into stable **module-relative RVAs**, and emits a reusable C/C++ header, a
 Cheat Engine table, or a plain report.
 
@@ -13,33 +13,40 @@ on the same engine crate.
 ## Highlights
 
 **Engine**
+- **Read/scan pipeline** — one reader streams large blocks of the target's memory (one read at a
+  time, so the kernel never serializes competing reads) while the rayon thread-pool scans blocks
+  as they arrive. The scan overlaps the cross-process read and effectively hides under it.
 - AVX2 masked matcher that anchors each pattern on its **rarest fixed byte** (static frequency
-  table), with a runtime-selected scalar fallback and per-region parallelism via rayon.
-- Reads through `NtReadVirtualMemory` directly — the lowest documented user-mode read primitive —
-  one large read per coalesced, committed, readable region; partial copies tolerated.
-- **Wait-and-attach**: point it at a process that is not running yet and it polls, then attaches
+  table), with a scalar fallback selected at runtime.
+- Scans **executable regions only** by default (where code signatures live), with a one-switch
+  fallback to the full module — so a live dump reads far fewer bytes.
+- **Wait-and-attach** — point it at a process that is not running yet and it polls, then attaches
   the instant the process and module appear (cancellable).
 - Suffix-driven resolvers: RIP-relative / `rel32` pointers, nested calls, struct displacements,
   and packet-header immediates, arch-aware for x64 and x86.
 - Output as deterministic, sorted, de-duplicated module RVAs — immune to ASLR.
 
 **Desktop workspace** (`maple-app`)
-- Enterprise dark dashboard: target toolbar, status-colored results table grouped by category,
-  and a metadata inspector (RVA, absolute address, signature, type, hit count, notes).
+- Frameless dark dashboard: target toolbar, status-colored results table grouped by category, and
+  a metadata inspector (RVA, absolute address, signature, type, hit count, notes).
 - Built-in **pattern manager** (add / edit / delete / notes) and a syntax-highlighted **editor**.
+- **Privacy mask** — one click blurs every signature (table, inspector, editor, and the edit
+  dialog) so you can screenshot without exposing your patterns. Visual only; the data is untouched.
+- Live **scan metrics** — scanned size, effective throughput, and attach time.
 - One-click export to `offsets.h`, a Cheat Engine table, or plain text.
-- Fully **offline** — the editor and all assets are embedded in the executable; no network calls.
+- **Fully offline** — the editor is vendored into the binary and a strict Content-Security-Policy
+  blocks every remote origin. The app makes no network requests, ever.
 
 **Command line** (`maple-cli`)
 - The same scan and output pipeline, suitable for scripting and CI.
 
 ## Workspace layout
 
-| Crate       | Role                                                                          |
-|-------------|-------------------------------------------------------------------------------|
-| `maple-core`| The engine: pattern parsing, the SIMD scanner, process memory access, the resolver, the scan orchestrator, and the output writers. |
-| `maple-app` | The desktop workspace — a Rust backend with an embedded web UI (Tauri).        |
-| `maple-cli` | The command-line front end.                                                    |
+| Crate        | Role                                                                          |
+|--------------|-------------------------------------------------------------------------------|
+| `maple-core` | The engine: pattern parsing, the SIMD scanner, process memory access, the resolver, the scan pipeline, and the output writers. |
+| `maple-app`  | The desktop workspace — a Rust backend with an embedded web UI (Tauri).        |
+| `maple-cli`  | The command-line front end.                                                    |
 
 ## Build
 
@@ -61,10 +68,13 @@ Run elevated so `OpenProcess` and `SeDebugPrivilege` succeed against a protected
 Launch `maple-app.exe`. In the Workspace view:
 
 1. Enter the **target process** (e.g. `MapleStory.exe`) and the **module** to scan.
-2. Choose the architecture, and leave **Wait for target** on to attach as soon as the process
-   starts. Optionally find the process **by window class** instead of name.
+2. Pick the architecture. Leave **Wait for target** on to attach the moment the process starts, or
+   switch to **Find by window class** to locate it by class instead of name. **Code regions only**
+   (on by default) scans executable memory; turn it off to scan the whole module.
 3. Load or edit your pattern list (Patterns / Editor views), then press **Start Scan**.
 4. Inspect any result, then **Export** an `offsets.h`, a Cheat Engine table, or a plain report.
+
+Use the **eye** button in the title bar to mask signatures before sharing a screenshot.
 
 ## Command line
 
@@ -145,31 +155,38 @@ See `patterns.sample.txt` for a worked example.
 
 1. Enable `SeDebugPrivilege`, locate the process by name or window class, and open it with
    `PROCESS_VM_READ` (waiting for it to appear if requested).
-2. Enumerate the target module's committed, readable regions and coalesce adjacent ones.
-3. Read each region with `NtReadVirtualMemory` (tolerating partial copies) and scan it in parallel
-   with an AVX2 masked matcher that anchors on the rarest fixed byte, with a scalar fallback
-   selected at runtime.
+2. Enumerate the module's committed regions — executable only by default — and coalesce adjacent
+   ones.
+3. Stream the regions through the pipeline: a reader issues large `NtReadVirtualMemory` reads
+   (tolerating partial copies) while the thread-pool scans each block with the AVX2 masked matcher
+   as soon as it lands, so reading and scanning overlap.
 4. Resolve each match according to its suffix and convert addresses to module RVAs.
 5. Emit `offsets.h`, a Cheat Engine table, or a plain report.
 
 ## Performance
 
-- Each pattern anchors on its **rarest fixed byte** (a static frequency table), not the first one,
-  so common bytes like `0x48` (REX.W) don't flood the prefilter. The matcher uses an AVX2 path
-  chosen at runtime via `is_x86_feature_detected!` with a scalar fallback, and regions are scanned
-  in parallel with rayon. Region buffers are read into uninitialized capacity to skip a redundant
-  zeroing pass.
-- Reads go through `NtReadVirtualMemory` directly — the lowest documented user-mode read primitive
-  (`ReadProcessMemory` merely wraps it) — with one large read per coalesced region.
-- Deliberately not used: `PssCaptureSnapshot` yields a consistent snapshot but its reads are
-  throttled to ~30 MB/s, far too slow to scan a whole module; AVX-512 / Teddy multi-pattern
-  prefilters were skipped because consumer AVX-512 support is inconsistent and Teddy lacks wildcard
-  support, which the rare-byte AVX2 prefilter already covers.
+The matcher anchors each pattern on its **rarest fixed byte** (a static frequency table), not the
+first one, so common bytes like `0x48` (REX.W) don't flood the prefilter. It uses an AVX2 path
+chosen at runtime via `is_x86_feature_detected!` with a scalar fallback, and read buffers use
+uninitialized capacity to skip a redundant zeroing pass.
 
-Measured throughput (criterion `cargo bench`, 8 MiB code-like buffer): the rarest-byte anchor scans
-at **~29 GiB/s**, versus **~0.8 GiB/s** when forced onto a common byte like `0x48` — about a **37x**
-difference, which is exactly why the anchor heuristic exists.
+Synthetic throughput (criterion `cargo bench`, 8 MiB code-like buffer): the rarest-byte anchor
+scans at **~29 GiB/s**, versus **~0.8 GiB/s** when forced onto a common byte like `0x48` — about a
+**37x** difference, which is exactly why the anchor heuristic exists.
 (`cargo run --release --example throughput` is a dependency-light equivalent.)
+
+Against a **live** process the wall clock is bound by the cross-process *read*, not the match.
+`NtReadVirtualMemory` is the lowest documented user-mode read primitive (`ReadProcessMemory` merely
+wraps it), and it copies a running target's memory at roughly **0.5 GB/s** — and concurrent reads
+don't help, because the kernel serializes reads against the target's address space. So the engine
+reads continuously on one thread and overlaps the (far faster) scan on the pool, hiding it under
+the read, and reads executable regions only to keep the byte count down. A full live dump of a
+~140 MB code section finishes in under ~0.3 s.
+
+Deliberately not used: `PssCaptureSnapshot` gives a consistent snapshot but throttles reads to
+~30 MB/s; a kernel driver (`MmCopyVirtualMemory`) could read faster but conflicts with anti-cheat;
+reading the image from disk is fast but misses the target's runtime state. AVX-512 / Teddy
+multi-pattern prefilters were skipped because the scan is already hidden under the read.
 
 ## License
 
