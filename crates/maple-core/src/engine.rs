@@ -54,18 +54,29 @@ fn rva(addr: usize, base: usize) -> u64 {
     addr.wrapping_sub(base) as u64
 }
 
+// Extra bytes read past a chunk's accept window so a pattern starting near the end still
+// matches in full and the resolver has enough trailing bytes to decode.
+const RESOLVE_MARGIN: usize = 24;
+// Accept-window size per parallel work unit; large regions are split into this many bytes.
+const SCAN_CHUNK: usize = 1 << 22;
+
 #[allow(clippy::uninit_vec)]
-fn read_region<S: MemorySource>(source: &S, region: &Region) -> Vec<u8> {
-    let mut buf: Vec<u8> = Vec::with_capacity(region.size);
+fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
+    let mut buf: Vec<u8> = Vec::with_capacity(len);
     // SAFETY: read_into only writes into the buffer via the OS and never reads it; the length
     // is set to the bytes actually written, so no uninitialized byte is ever exposed.
     let read = {
-        let spare = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr(), region.size) };
-        source.read_into(region.base, spare).unwrap_or(0)
+        let spare = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr(), len) };
+        source.read_into(base, spare).unwrap_or(0)
     };
     unsafe { buf.set_len(read) };
     buf
 }
+
+// One streamed block: (base address, accept-window length, buffer of accept+overlap bytes).
+// A match is attributed to the single block whose accept window holds its start, so a pattern
+// straddling a block boundary is found exactly once.
+type Block = (usize, usize, Vec<u8>);
 
 fn resolve<S: MemorySource>(
     kind: Kind,
@@ -103,6 +114,20 @@ pub fn scan<S>(
 where
     S: MemorySource + Sync,
 {
+    scan_chunked(source, module_base, regions, patterns, arch, SCAN_CHUNK)
+}
+
+fn scan_chunked<S>(
+    source: &S,
+    module_base: usize,
+    regions: &[Region],
+    patterns: &[Pattern],
+    arch: Arch,
+    chunk: usize,
+) -> ScanResult
+where
+    S: MemorySource + Sync,
+{
     let compiled: Vec<(Kind, Option<CompiledPattern>)> = patterns
         .iter()
         .map(|p| {
@@ -111,31 +136,62 @@ where
         })
         .collect();
 
-    let hits: Vec<Hit> = regions
-        .par_iter()
-        .flat_map_iter(|region| {
-            let buf = read_region(source, region);
-            let mut local = Vec::new();
-            for (idx, (kind, compiled)) in compiled.iter().enumerate() {
-                let Some(cp) = compiled else { continue };
-                if buf.len() < cp.len() {
-                    continue;
-                }
-                for off in scanner::find_all(&buf, cp) {
-                    let addr = region.base + off;
-                    let (value, is_offset) =
-                        resolve(*kind, source, module_base, addr, &buf[off..], arch);
-                    local.push(Hit {
-                        pattern_idx: idx,
-                        addr,
-                        value,
-                        is_offset,
-                    });
+    let max_len = compiled
+        .iter()
+        .filter_map(|(_, c)| c.as_ref().map(CompiledPattern::len))
+        .max()
+        .unwrap_or(1);
+    let overlap = max_len.max(RESOLVE_MARGIN);
+    let block = chunk.max(1);
+
+    // A single reader streams large blocks across the process boundary - one read at a time, so
+    // the kernel never serializes competing reads - while the rayon pool scans already-read
+    // blocks in parallel. Read and scan overlap, so the scan hides under the read and the wall
+    // clock approaches the raw cross-process read time.
+    let hits: Vec<Hit> = std::thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Block>(8);
+        scope.spawn(move || {
+            for region in regions {
+                let mut off = 0;
+                while off < region.size {
+                    let accept = block.min(region.size - off);
+                    let read_len = (accept + overlap).min(region.size - off);
+                    let buf = read_range(source, region.base + off, read_len);
+                    if tx.send((region.base + off, accept, buf)).is_err() {
+                        return;
+                    }
+                    off += accept;
                 }
             }
-            local
-        })
-        .collect();
+        });
+        rx.into_iter()
+            .par_bridge()
+            .flat_map_iter(|(base, accept_len, buf)| {
+                let mut local = Vec::new();
+                for (idx, (kind, compiled)) in compiled.iter().enumerate() {
+                    let Some(cp) = compiled else { continue };
+                    if buf.len() < cp.len() {
+                        continue;
+                    }
+                    for off in scanner::find_all(&buf, cp) {
+                        if off >= accept_len {
+                            continue;
+                        }
+                        let addr = base + off;
+                        let (value, is_offset) =
+                            resolve(*kind, source, module_base, addr, &buf[off..], arch);
+                        local.push(Hit {
+                            pattern_idx: idx,
+                            addr,
+                            value,
+                            is_offset,
+                        });
+                    }
+                }
+                local
+            })
+            .collect()
+    });
 
     let total_matches = hits.len();
     let mut by_pattern: Vec<Vec<&Hit>> = vec![Vec::new(); patterns.len()];
@@ -264,5 +320,27 @@ mod tests {
         assert!(result.findings.is_empty());
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].status, Status::NotFound);
+    }
+
+    #[test]
+    fn chunked_scan_finds_boundary_straddling_matches_once() {
+        let base = 0x1000usize;
+        let mut data = vec![0u8; 200];
+        let sig = [0xDE, 0xAD, 0xBE, 0xEF, 0x11];
+        // starts landing before, on, across, and in the overlap of 16-byte chunk boundaries
+        let starts = [3usize, 33, 48, 64, 100, 190];
+        for &s in &starts {
+            data[s..s + sig.len()].copy_from_slice(&sig);
+        }
+        let source = BufferSource::new(base, data);
+        let regions = [Region { base, size: 200 }];
+        let patterns = parse_patterns("Foo = DE AD BE EF 11", Arch::X64);
+
+        // a deliberately tiny chunk forces many boundaries; each match must appear exactly once
+        let result = scan_chunked(&source, base, &regions, &patterns, Arch::X64, 16);
+        assert_eq!(result.total_matches, starts.len());
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].matches, starts.len());
+        assert_eq!(result.rows[0].status, Status::Found);
     }
 }

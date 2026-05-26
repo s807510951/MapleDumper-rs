@@ -221,7 +221,13 @@ fn is_readable(protect: u32) -> bool {
     protect & READABLE != 0
 }
 
-fn enumerate_regions(handle: HANDLE, module: ModuleInfo) -> Vec<Region> {
+fn is_executable(protect: u32) -> bool {
+    const EXECUTABLE: u32 =
+        PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    protect & EXECUTABLE != 0
+}
+
+fn enumerate_regions(handle: HANDLE, module: ModuleInfo, executable_only: bool) -> Vec<Region> {
     let start = module.base;
     let end = module.base + module.size;
     let mut regions = Vec::new();
@@ -245,7 +251,8 @@ fn enumerate_regions(handle: HANDLE, module: ModuleInfo) -> Vec<Region> {
             break;
         }
         let region_end = region_base + region_size;
-        if mbi.State == MEM_COMMIT && is_readable(mbi.Protect) {
+        let usable = is_readable(mbi.Protect) && (!executable_only || is_executable(mbi.Protect));
+        if mbi.State == MEM_COMMIT && usable {
             let clip_start = region_base.max(start);
             let clip_end = region_end.min(end);
             if clip_end > clip_start {
@@ -425,9 +432,16 @@ impl Target {
         )
     }
 
+    /// Every committed, readable region of the module.
     #[must_use]
     pub fn regions(&self) -> Vec<Region> {
-        enumerate_regions(self.handle.0, self.module)
+        enumerate_regions(self.handle.0, self.module, false)
+    }
+
+    /// Only the executable regions of the module - what code signatures live in.
+    #[must_use]
+    pub fn code_regions(&self) -> Vec<Region> {
+        enumerate_regions(self.handle.0, self.module, true)
     }
 }
 
