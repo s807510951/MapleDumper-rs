@@ -7,8 +7,9 @@ attaches to a running process, scans the target module with an AVX2-accelerated 
 resolves the matches into stable **module-relative RVAs**, and emits a reusable C/C++ header, a
 Cheat Engine table, or a plain report.
 
-It ships as a **frameless desktop workspace** and a **scriptable command-line tool**, both built
-on the same engine crate.
+It ships as a **frameless desktop workspace** — which keeps a local history of every scan so you can
+compare offsets across game versions — and a **scriptable command-line tool**, both built on the
+same engine crate.
 
 ## Highlights
 
@@ -29,16 +30,25 @@ on the same engine crate.
 **Desktop workspace** (`maple-app`)
 - Frameless dark dashboard: target toolbar, status-colored results table grouped by category, and
   a metadata inspector (RVA, absolute address, signature, type, hit count, notes).
+- **Version history** — every scan is saved to a local SQLite database, grouped by build (a content
+  hash of the code section), so 50+ game versions stay organized. Identical re-scans are de-duplicated.
+- **Compare across versions** — a tabbed workspace: open any scan, compare any two builds
+  (moved / new / removed offsets), or line every version up in a **matrix** to track an offset across
+  the whole timeline. Click a changed symbol to see its **bytes and x86/x64 disassembly** side by side.
 - Built-in **pattern manager** (add / edit / delete / notes) and a syntax-highlighted **editor**.
-- **Privacy mask** — one click blurs every signature (table, inspector, editor, and the edit
-  dialog) so you can screenshot without exposing your patterns. Visual only; the data is untouched.
+- **Privacy mask** — one click hides every signature, name, address, category, and note for
+  screenshots. Pick **blur**, or a **showcase mode** that swaps in realistic fake values instead.
+  Visual only; the real data is untouched.
+- **Press Ctrl+F** anywhere to filter the current table; everything stays in-app, with copy-to-clipboard
+  and smart auto-named exports (`offsets.h`, a Cheat Engine table, or plain text).
 - Live **scan metrics** — scanned size, effective throughput, and attach time.
-- One-click export to `offsets.h`, a Cheat Engine table, or plain text.
-- **Fully offline** — the editor is vendored into the binary and a strict Content-Security-Policy
-  blocks every remote origin. The app makes no network requests, ever.
+- **Fully offline** — the editor and the history database are local, and a strict
+  Content-Security-Policy blocks every remote origin. The app makes no network requests, ever.
 
 **Command line** (`maple-cli`)
 - The same scan and output pipeline, suitable for scripting and CI.
+- Offline helpers that need no target: `--lint` flags weak signatures, `--diff` reports which
+  offsets moved between two dumps, and `--profile` breaks a live scan into read/scan/resolve timing.
 
 ## Workspace layout
 
@@ -73,8 +83,11 @@ Launch `maple-app.exe`. In the Workspace view:
    (on by default) scans executable memory; turn it off to scan the whole module.
 3. Load or edit your pattern list (Patterns / Editor views), then press **Start Scan**.
 4. Inspect any result, then **Export** an `offsets.h`, a Cheat Engine table, or a plain report.
+5. Every scan is saved to **History** — revisit it, compare two builds, open the **Matrix** to track an
+   offset across all versions, or click a changed symbol for its bytes and disassembly.
 
-Use the **eye** button in the title bar to mask signatures before sharing a screenshot.
+Use the **eye** button in the title bar to hide signatures before sharing a screenshot — blur, or the
+showcase randomizer in Settings.
 
 ## Command line
 
@@ -92,11 +105,19 @@ mapledumper (--process <name> | --class <window-class>) [options]
   --no-wait          do not wait for the process; fail if it is not running
   --timeout <secs>   give up waiting after this many seconds
   --profile          measure the read/scan/resolve split against the live target and exit
+  --lint             check the pattern file for weak signatures and exit
+  --diff <a> <b>     compare two saved dumps and report what moved, then exit
   -h, --help         print help
 ```
 
 ```
 mapledumper --process MapleStory.exe --patterns patterns.txt --out .
+
+# check signature quality without attaching to anything
+mapledumper --lint --patterns patterns.txt
+
+# see which offsets moved between two game versions
+mapledumper --diff old/update.txt new/update.txt
 ```
 
 ## Patterns
@@ -151,7 +172,9 @@ See `patterns.sample.txt` for a worked example.
   module base to rebase). `_OFF` symbols are raw struct offsets.
 
 - **`update.txt`** — a plain report by default, or a Cheat Engine table with `--ce`
-  (`define(Name, "module"+RVA)` / `registersymbol(Name)`).
+  (`define(Name, "module"+RVA)` / `registersymbol(Name)`). The plain report carries a `# build:`
+  stamp — a content hash of the code section, its size, the PE timestamp, and the file version — so
+  `--diff` and the History tab can tell builds apart.
 
 ## How it works
 
