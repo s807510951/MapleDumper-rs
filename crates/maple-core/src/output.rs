@@ -86,9 +86,17 @@ pub fn cheat_table(findings: &[Finding], module_name: &str) -> String {
 }
 
 #[must_use]
-pub fn plain_text(findings: &[Finding], module_name: &str, module_base: u64) -> String {
+pub fn plain_text(
+    findings: &[Finding],
+    module_name: &str,
+    module_base: u64,
+    extra_header: Option<&str>,
+) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "module {module_name} base 0x{module_base:X}");
+    if let Some(header) = extra_header {
+        let _ = writeln!(out, "{header}");
+    }
     let _ = writeln!(out, "###################");
     for (category, items) in grouped(findings) {
         for f in items {
@@ -152,7 +160,7 @@ mod tests {
     #[test]
     fn plain_text_lists_findings() {
         let findings = vec![f("Foo", "globals", 0xABCD, false)];
-        let t = plain_text(&findings, "MapleStory.exe", 0x1_4000_0000);
+        let t = plain_text(&findings, "MapleStory.exe", 0x1_4000_0000, None);
         assert!(t.contains("[globals] Foo = 0xABCD"));
     }
 }

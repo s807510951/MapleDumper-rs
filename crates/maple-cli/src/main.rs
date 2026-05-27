@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use maple_core::output::{cheat_table, offsets_header, plain_text};
 use maple_core::pattern::{Arch, parse_patterns_file};
-use maple_core::{AttachOptions, Locator, ProfileReport, ScanResult, Target, profile, scan};
+use maple_core::{
+    AttachOptions, BuildStamp, DiffReport, Locator, Pattern, ProfileReport, ScanResult, Status,
+    Target, diff, lint, parse_dump, parse_stamp, profile, scan,
+};
 
 struct Args {
     process: Option<String>,
@@ -19,6 +22,8 @@ struct Args {
     wait: bool,
     timeout: Option<Duration>,
     profile: bool,
+    lint: bool,
+    diff: Option<(PathBuf, PathBuf)>,
 }
 
 const HELP: &str = "\
@@ -41,6 +46,8 @@ OUTPUT:
     --ce               write update.txt as a Cheat Engine table
     --no-offsets       do not write offsets.h
     --profile          measure the read/scan/resolve split against the live target and exit
+    --lint             check the pattern file for weak signatures and exit
+    --diff <a> <b>     compare two saved dumps and report what moved, then exit
 
     -h, --help         print this help
     -V, --version      print version
@@ -71,6 +78,8 @@ fn parse_args() -> Result<Args, String> {
     let mut wait = true;
     let mut timeout = None;
     let mut profile = false;
+    let mut lint = false;
+    let mut diff = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -85,6 +94,12 @@ fn parse_args() -> Result<Args, String> {
             "--no-offsets" => offsets = false,
             "--no-wait" => wait = false,
             "--profile" => profile = true,
+            "--lint" => lint = true,
+            "--diff" => {
+                let old = PathBuf::from(value(&mut it, "--diff")?);
+                let new = PathBuf::from(value(&mut it, "--diff")?);
+                diff = Some((old, new));
+            }
             "--timeout" => {
                 let raw = value(&mut it, "--timeout")?;
                 let secs: u64 = raw
@@ -119,6 +134,8 @@ fn parse_args() -> Result<Args, String> {
         wait,
         timeout,
         profile,
+        lint,
+        diff,
     })
 }
 
@@ -139,15 +156,22 @@ fn locator(args: &Args) -> Result<Locator, String> {
     }
 }
 
-fn write_outputs(args: &Args, result: &ScanResult, module: &str, base: u64) -> Result<(), String> {
+fn write_outputs(
+    args: &Args,
+    result: &ScanResult,
+    module: &str,
+    base: u64,
+    stamp: Option<&BuildStamp>,
+) -> Result<(), String> {
     std::fs::create_dir_all(&args.out)
         .map_err(|e| format!("create {}: {e}", args.out.display()))?;
 
+    let header = stamp.map(BuildStamp::header_line);
     let update = args.out.join("update.txt");
     let contents = if args.ce {
         cheat_table(&result.findings, module)
     } else {
-        plain_text(&result.findings, module, base)
+        plain_text(&result.findings, module, base, header.as_deref())
     };
     std::fs::write(&update, contents).map_err(|e| format!("write {}: {e}", update.display()))?;
     println!("[+] wrote {}", update.display());
@@ -164,6 +188,19 @@ fn write_outputs(args: &Args, result: &ScanResult, module: &str, base: u64) -> R
 fn run() -> Result<(), String> {
     let args = parse_args()?;
 
+    if let Some((old, new)) = &args.diff {
+        let old_text =
+            std::fs::read_to_string(old).map_err(|e| format!("read {}: {e}", old.display()))?;
+        let new_text =
+            std::fs::read_to_string(new).map_err(|e| format!("read {}: {e}", new.display()))?;
+        print_build_compare(
+            parse_stamp(&old_text).as_ref(),
+            parse_stamp(&new_text).as_ref(),
+        );
+        print_diff(&diff(&parse_dump(&old_text), &parse_dump(&new_text)));
+        return Ok(());
+    }
+
     let patterns = parse_patterns_file(&args.patterns, args.arch)
         .map_err(|e| format!("failed to read {}: {e}", args.patterns.display()))?;
     if patterns.is_empty() {
@@ -173,6 +210,11 @@ fn run() -> Result<(), String> {
         ));
     }
     println!("[+] loaded {} patterns", patterns.len());
+
+    if args.lint {
+        print_lints(&patterns);
+        return Ok(());
+    }
 
     let loc = locator(&args)?;
     let module = module_name(&args);
@@ -228,9 +270,33 @@ fn run() -> Result<(), String> {
             println!("    {name}");
         }
     }
+    let ambiguous: Vec<_> = result
+        .rows
+        .iter()
+        .filter(|r| r.status == Status::Found && r.matches > 1)
+        .collect();
+    if !ambiguous.is_empty() {
+        println!(
+            "[!] ambiguous (multiple matches, used the first): {}",
+            ambiguous.len()
+        );
+        for r in &ambiguous {
+            println!("    {} ({} matches)", r.name, r.matches);
+        }
+    }
     println!("[+] total matches {}", result.total_matches);
 
-    write_outputs(&args, &result, &module, target.module.base as u64)
+    let mut stamp = BuildStamp::capture(&target, target.module.base, &target.code_regions());
+    stamp.version = target.file_version();
+    println!("[+] build {} ({} bytes)", stamp.short(), stamp.bytes);
+
+    write_outputs(
+        &args,
+        &result,
+        &module,
+        target.module.base as u64,
+        Some(&stamp),
+    )
 }
 
 fn gbps(bytes: u64, ms: u128) -> f64 {
@@ -300,6 +366,63 @@ fn print_profile(r: &ProfileReport) {
         println!(
             "         not purely read-bound: scan/resolve are a meaningful fraction, so matcher work may pay off."
         );
+    }
+}
+
+fn print_build_compare(old: Option<&BuildStamp>, new: Option<&BuildStamp>) {
+    if let (Some(a), Some(b)) = (old, new) {
+        let state = if a.hash == b.hash { "same" } else { "changed" };
+        println!("[i] build {} -> {} ({state})", a.short(), b.short());
+        if a.version.is_some() || b.version.is_some() {
+            println!(
+                "    version {} -> {}",
+                a.version.as_deref().unwrap_or("?"),
+                b.version.as_deref().unwrap_or("?")
+            );
+        }
+    }
+}
+
+fn print_lints(patterns: &[Pattern]) {
+    let mut flagged = 0;
+    for p in patterns {
+        let lints = lint(&p.signature);
+        if lints.is_empty() {
+            continue;
+        }
+        flagged += 1;
+        println!("[!] {}", p.name);
+        for l in &lints {
+            println!("      {}", l.message());
+        }
+    }
+    println!();
+    println!(
+        "[+] {} patterns, {flagged} flagged, {} clean",
+        patterns.len(),
+        patterns.len() - flagged
+    );
+}
+
+fn print_diff(report: &DiffReport) {
+    println!("[=] {} unchanged", report.unchanged);
+    if !report.moved.is_empty() {
+        println!("[~] {} moved:", report.moved.len());
+        for m in &report.moved {
+            println!("      {} 0x{:X} -> 0x{:X}", m.name, m.old, m.new);
+        }
+    }
+    if !report.added.is_empty() {
+        println!("[+] {} new:", report.added.len());
+        for f in &report.added {
+            println!("      {} 0x{:X}", f.name, f.value);
+        }
+    }
+    if !report.removed.is_empty() {
+        println!("[-] {} removed:", report.removed.len());
+        for f in &report.removed {
+            println!("      {} 0x{:X}", f.name, f.value);
+        }
     }
 }
 

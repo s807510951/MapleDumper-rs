@@ -21,4 +21,4 @@ harness = false
 workspace = true
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_Security"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_Storage_FileSystem"] }

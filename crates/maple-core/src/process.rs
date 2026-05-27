@@ -12,6 +12,9 @@ use windows_sys::Win32::Security::{
     AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
     TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
 };
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW, PROCESSENTRY32W,
     Process32FirstW, Process32NextW, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
@@ -23,8 +26,9 @@ use windows_sys::Win32::System::Memory::{
     VirtualQueryEx,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    QueryFullProcessImageNameW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
 
@@ -442,6 +446,67 @@ impl Target {
     #[must_use]
     pub fn code_regions(&self) -> Vec<Region> {
         enumerate_regions(self.handle.0, self.module, true)
+    }
+
+    /// The image's on-disk file version (VS_FIXEDFILEINFO), best-effort. Note this reads the
+    /// resource from the file on disk, which a game may not keep in step with its real version.
+    #[must_use]
+    pub fn file_version(&self) -> Option<String> {
+        let path = self.image_path()?;
+        unsafe {
+            let mut ignored = 0u32;
+            let size = GetFileVersionInfoSizeW(path.as_ptr(), &mut ignored);
+            if size == 0 {
+                return None;
+            }
+            let mut data = vec![0u8; size as usize];
+            if GetFileVersionInfoW(path.as_ptr(), 0, size, data.as_mut_ptr().cast::<c_void>()) == 0
+            {
+                return None;
+            }
+            let mut fixed: *mut c_void = std::ptr::null_mut();
+            let mut len = 0u32;
+            let root = [u16::from(b'\\'), 0];
+            if VerQueryValueW(
+                data.as_ptr().cast::<c_void>(),
+                root.as_ptr(),
+                &mut fixed,
+                &mut len,
+            ) == 0
+                || fixed.is_null()
+                || (len as usize) < size_of::<VS_FIXEDFILEINFO>()
+            {
+                return None;
+            }
+            let info = &*fixed.cast::<VS_FIXEDFILEINFO>();
+            let (ms, ls) = (info.dwFileVersionMS, info.dwFileVersionLS);
+            Some(format!(
+                "{}.{}.{}.{}",
+                ms >> 16,
+                ms & 0xFFFF,
+                ls >> 16,
+                ls & 0xFFFF
+            ))
+        }
+    }
+
+    fn image_path(&self) -> Option<Vec<u16>> {
+        let mut buf = vec![0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = unsafe {
+            QueryFullProcessImageNameW(
+                self.handle.0,
+                PROCESS_NAME_WIN32,
+                buf.as_mut_ptr(),
+                &mut len,
+            )
+        };
+        if ok == 0 || len == 0 {
+            return None;
+        }
+        buf.truncate(len as usize);
+        buf.push(0);
+        Some(buf)
     }
 }
 

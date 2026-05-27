@@ -37,7 +37,8 @@ impl CompiledPattern {
     }
 }
 
-fn byte_frequency(b: u8) -> u32 {
+#[must_use]
+pub fn byte_frequency(b: u8) -> u32 {
     match b {
         0x00 => 1000,
         0xFF => 700,
