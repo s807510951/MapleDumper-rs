@@ -11,7 +11,7 @@ pub mod scanner;
 #[cfg(windows)]
 pub mod process;
 
-pub use engine::{PatternRow, ScanResult, Status, scan};
+pub use engine::{PatternRow, ProfileReport, ScanResult, Status, profile, scan};
 pub use memory::{MemorySource, Region};
 pub use output::Finding;
 pub use pattern::{Arch, Pattern, Signature};

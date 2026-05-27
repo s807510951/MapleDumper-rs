@@ -4,6 +4,8 @@ use crate::pattern::{Arch, Pattern};
 use crate::resolver::{self, Kind};
 use crate::scanner::{self, CompiledPattern};
 use rayon::prelude::*;
+use std::hint::black_box;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -57,8 +59,9 @@ fn rva(addr: usize, base: usize) -> u64 {
 // Extra bytes read past a chunk's accept window so a pattern starting near the end still
 // matches in full and the resolver has enough trailing bytes to decode.
 const RESOLVE_MARGIN: usize = 24;
-// Accept-window size per parallel work unit; large regions are split into this many bytes.
-const SCAN_CHUNK: usize = 1 << 22;
+// Accept-window size per parallel work unit. Smaller windows load-balance better across cores;
+// profiling a 143 MB module on 16 cores put the knee at 256 KiB (~6x faster than the old 4 MiB).
+const SCAN_CHUNK: usize = 1 << 18;
 
 #[allow(clippy::uninit_vec)]
 fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
@@ -73,9 +76,7 @@ fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
     buf
 }
 
-// One streamed block: (base address, accept-window length, buffer of accept+overlap bytes).
-// A match is attributed to the single block whose accept window holds its start, so a pattern
-// straddling a block boundary is found exactly once.
+// A streamed block: base address, accept-window length, and the accept+overlap bytes read.
 type Block = (usize, usize, Vec<u8>);
 
 fn resolve<S: MemorySource>(
@@ -128,13 +129,7 @@ fn scan_chunked<S>(
 where
     S: MemorySource + Sync,
 {
-    let compiled: Vec<(Kind, Option<CompiledPattern>)> = patterns
-        .iter()
-        .map(|p| {
-            let (kind, _) = Kind::classify(&p.name);
-            (kind, CompiledPattern::new(&p.signature))
-        })
-        .collect();
+    let compiled = compile_patterns(patterns);
 
     let max_len = compiled
         .iter()
@@ -144,26 +139,41 @@ where
     let overlap = max_len.max(RESOLVE_MARGIN);
     let block = chunk.max(1);
 
-    // A single reader streams large blocks across the process boundary - one read at a time, so
-    // the kernel never serializes competing reads - while the rayon pool scans already-read
-    // blocks in parallel. Read and scan overlap, so the scan hides under the read and the wall
-    // clock approaches the raw cross-process read time.
+    // A few reader threads stream region windows into the channel while the rayon pool scans them.
+    // Each hit is kept only by the window covering its start, so a match straddling a boundary is
+    // counted once no matter which reader produced it or in what order blocks arrive.
+    let mut units: Vec<(usize, usize, usize)> = Vec::new();
+    for region in regions {
+        let mut off = 0;
+        while off < region.size {
+            let accept = block.min(region.size - off);
+            let read_len = (accept + overlap).min(region.size - off);
+            units.push((region.base + off, accept, read_len));
+            off += accept;
+        }
+    }
+    let units = &units;
+    let readers = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, 4);
+
     let hits: Vec<Hit> = std::thread::scope(|scope| {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Block>(8);
-        scope.spawn(move || {
-            for region in regions {
-                let mut off = 0;
-                while off < region.size {
-                    let accept = block.min(region.size - off);
-                    let read_len = (accept + overlap).min(region.size - off);
-                    let buf = read_range(source, region.base + off, read_len);
-                    if tx.send((region.base + off, accept, buf)).is_err() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Block>(readers * 2 + 4);
+        for w in 0..readers {
+            let tx = tx.clone();
+            scope.spawn(move || {
+                let mut i = w;
+                while i < units.len() {
+                    let (base, accept, read_len) = units[i];
+                    let buf = read_range(source, base, read_len);
+                    if tx.send((base, accept, buf)).is_err() {
                         return;
                     }
-                    off += accept;
+                    i += readers;
                 }
-            }
-        });
+            });
+        }
+        drop(tx);
         rx.into_iter()
             .par_bridge()
             .flat_map_iter(|(base, accept_len, buf)| {
@@ -274,6 +284,258 @@ where
         matched_unresolved,
         not_found,
         total_matches,
+    }
+}
+
+type CompiledPat = (Kind, Option<CompiledPattern>);
+
+fn compile_patterns(patterns: &[Pattern]) -> Vec<CompiledPat> {
+    patterns
+        .iter()
+        .map(|p| {
+            let (kind, _) = Kind::classify(&p.name);
+            (kind, CompiledPattern::new(&p.signature))
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+struct Probe {
+    buf: usize,
+    off: usize,
+    pat: usize,
+}
+
+fn read_sweep<S: MemorySource + Sync>(
+    source: &S,
+    regions: &[Region],
+    block: usize,
+    counts: &[usize],
+) -> Vec<(usize, u128)> {
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+    for region in regions {
+        let mut off = 0;
+        while off < region.size {
+            let len = block.min(region.size - off);
+            blocks.push((region.base + off, len));
+            off += len;
+        }
+    }
+    let blocks = &blocks;
+    counts
+        .iter()
+        .map(|&readers| {
+            let t = Instant::now();
+            std::thread::scope(|scope| {
+                for w in 0..readers {
+                    scope.spawn(move || {
+                        let mut i = w;
+                        while i < blocks.len() {
+                            let (base, len) = blocks[i];
+                            black_box(read_range(source, base, len));
+                            i += readers;
+                        }
+                    });
+                }
+            });
+            (readers, t.elapsed().as_millis())
+        })
+        .collect()
+}
+
+fn scan_serial(bufs: &[(usize, Vec<u8>)], compiled: &[CompiledPat]) -> (u128, Vec<Probe>) {
+    let mut found = Vec::new();
+    let t = Instant::now();
+    for (buf, (_, data)) in bufs.iter().enumerate() {
+        for (pat, (_, cp)) in compiled.iter().enumerate() {
+            let Some(cp) = cp else { continue };
+            if data.len() < cp.len() {
+                continue;
+            }
+            for off in scanner::find_all(data, cp) {
+                found.push(Probe { buf, off, pat });
+            }
+        }
+    }
+    (t.elapsed().as_millis(), found)
+}
+
+fn scan_parallel(
+    bufs: &[(usize, Vec<u8>)],
+    compiled: &[CompiledPat],
+    block: usize,
+    overlap: usize,
+) -> u128 {
+    let mut units: Vec<(usize, usize, usize)> = Vec::new();
+    for (bi, (_, data)) in bufs.iter().enumerate() {
+        let mut off = 0;
+        while off < data.len() {
+            let accept = block.min(data.len() - off);
+            units.push((bi, off, accept));
+            off += accept;
+        }
+    }
+    let t = Instant::now();
+    let hits: usize = units
+        .par_iter()
+        .map(|&(bi, start, accept)| {
+            let data = &bufs[bi].1;
+            let end = (start + accept + overlap).min(data.len());
+            let slice = &data[start..end];
+            compiled
+                .iter()
+                .filter_map(|(_, cp)| cp.as_ref())
+                .filter(|cp| slice.len() >= cp.len())
+                .map(|cp| {
+                    scanner::find_all(slice, cp)
+                        .iter()
+                        .filter(|&&o| o < accept)
+                        .count()
+                })
+                .sum::<usize>()
+        })
+        .sum();
+    black_box(hits);
+    t.elapsed().as_millis()
+}
+
+fn resolve_pass<S: MemorySource>(
+    source: &S,
+    module_base: usize,
+    bufs: &[(usize, Vec<u8>)],
+    compiled: &[CompiledPat],
+    found: &[Probe],
+    arch: Arch,
+) -> (u128, usize) {
+    let mut call_hits = 0;
+    let mut acc = 0u64;
+    let t = Instant::now();
+    for p in found {
+        let kind = compiled[p.pat].0;
+        if kind == Kind::Call {
+            call_hits += 1;
+        }
+        let addr = bufs[p.buf].0 + p.off;
+        let (value, _) = resolve(
+            kind,
+            source,
+            module_base,
+            addr,
+            &bufs[p.buf].1[p.off..],
+            arch,
+        );
+        acc = acc.wrapping_add(value.unwrap_or(0));
+    }
+    black_box(acc);
+    (t.elapsed().as_millis(), call_hits)
+}
+
+fn time_scan<S: MemorySource + Sync>(
+    source: &S,
+    module_base: usize,
+    regions: &[Region],
+    patterns: &[Pattern],
+    arch: Arch,
+    chunk: usize,
+) -> u128 {
+    let t = Instant::now();
+    black_box(scan_chunked(
+        source,
+        module_base,
+        regions,
+        patterns,
+        arch,
+        chunk,
+    ));
+    t.elapsed().as_millis()
+}
+
+/// Phase-separated timing of a scan against a live target, so the read / scan / resolve split
+/// can be measured instead of guessed. All times are milliseconds. Runs several full reads of
+/// the module, so it is a one-off diagnostic, not a hot path.
+#[derive(Debug, Clone)]
+pub struct ProfileReport {
+    pub regions: usize,
+    pub bytes: u64,
+    pub cores: usize,
+    pub patterns: usize,
+    pub read_ms: Vec<(usize, u128)>,
+    pub scan_serial_ms: u128,
+    pub scan_parallel_ms: u128,
+    pub matches: usize,
+    pub resolve_ms: u128,
+    pub call_hits: usize,
+    pub full_ms: u128,
+    pub chunk_ms: Vec<(usize, u128)>,
+}
+
+#[must_use]
+pub fn profile<S>(
+    source: &S,
+    module_base: usize,
+    regions: &[Region],
+    patterns: &[Pattern],
+    arch: Arch,
+) -> ProfileReport
+where
+    S: MemorySource + Sync,
+{
+    const BLOCK: usize = 1 << 18;
+
+    let compiled = compile_patterns(patterns);
+    let max_len = compiled
+        .iter()
+        .filter_map(|(_, c)| c.as_ref().map(CompiledPattern::len))
+        .max()
+        .unwrap_or(1);
+    let bytes: u64 = regions.iter().map(|r| r.size as u64).sum();
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+
+    let read_ms = read_sweep(source, regions, BLOCK, &[1, 2, 4]);
+
+    let bufs: Vec<(usize, Vec<u8>)> = regions
+        .iter()
+        .map(|r| (r.base, read_range(source, r.base, r.size)))
+        .collect();
+
+    let (scan_serial_ms, found) = scan_serial(&bufs, &compiled);
+
+    let scan_parallel_ms = scan_parallel(&bufs, &compiled, BLOCK, max_len.max(1));
+
+    let (resolve_ms, call_hits) = resolve_pass(source, module_base, &bufs, &compiled, &found, arch);
+
+    let full_ms = time_scan(source, module_base, regions, patterns, arch, SCAN_CHUNK);
+
+    let chunk_ms = [
+        64usize << 10,
+        128 << 10,
+        256 << 10,
+        512 << 10,
+        1 << 20,
+        2 << 20,
+    ]
+    .into_iter()
+    .map(|size| {
+        (
+            size,
+            time_scan(source, module_base, regions, patterns, arch, size),
+        )
+    })
+    .collect();
+
+    ProfileReport {
+        regions: regions.len(),
+        bytes,
+        cores,
+        patterns: patterns.len(),
+        read_ms,
+        scan_serial_ms,
+        scan_parallel_ms,
+        matches: found.len(),
+        resolve_ms,
+        call_hits,
+        full_ms,
+        chunk_ms,
     }
 }
 

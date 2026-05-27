@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use maple_core::output::{cheat_table, offsets_header, plain_text};
 use maple_core::pattern::{Arch, parse_patterns_file};
-use maple_core::{AttachOptions, Locator, ScanResult, Target, scan};
+use maple_core::{AttachOptions, Locator, ProfileReport, ScanResult, Target, profile, scan};
 
 struct Args {
     process: Option<String>,
@@ -18,6 +18,7 @@ struct Args {
     offsets: bool,
     wait: bool,
     timeout: Option<Duration>,
+    profile: bool,
 }
 
 const HELP: &str = "\
@@ -39,6 +40,7 @@ OUTPUT:
     --out <dir>        output directory, created if missing (default: .)
     --ce               write update.txt as a Cheat Engine table
     --no-offsets       do not write offsets.h
+    --profile          measure the read/scan/resolve split against the live target and exit
 
     -h, --help         print this help
     -V, --version      print version
@@ -68,6 +70,7 @@ fn parse_args() -> Result<Args, String> {
     let mut offsets = true;
     let mut wait = true;
     let mut timeout = None;
+    let mut profile = false;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -81,6 +84,7 @@ fn parse_args() -> Result<Args, String> {
             "--ce" => ce = true,
             "--no-offsets" => offsets = false,
             "--no-wait" => wait = false,
+            "--profile" => profile = true,
             "--timeout" => {
                 let raw = value(&mut it, "--timeout")?;
                 let secs: u64 = raw
@@ -114,6 +118,7 @@ fn parse_args() -> Result<Args, String> {
         offsets,
         wait,
         timeout,
+        profile,
     })
 }
 
@@ -191,6 +196,17 @@ fn run() -> Result<(), String> {
         module, target.module.base, target.module.size
     );
 
+    if args.profile {
+        let regions = target.code_regions();
+        println!(
+            "[*] profiling {} executable regions (runs several full reads, give it a few seconds)...",
+            regions.len()
+        );
+        let report = profile(&target, target.module.base, &regions, &patterns, args.arch);
+        print_profile(&report);
+        return Ok(());
+    }
+
     let regions = target.regions();
     println!("[+] scanning {} regions", regions.len());
     let result = scan(&target, target.module.base, &regions, &patterns, args.arch);
@@ -215,6 +231,76 @@ fn run() -> Result<(), String> {
     println!("[+] total matches {}", result.total_matches);
 
     write_outputs(&args, &result, &module, target.module.base as u64)
+}
+
+fn gbps(bytes: u64, ms: u128) -> f64 {
+    if ms == 0 {
+        return 0.0;
+    }
+    bytes as f64 / (ms as f64 / 1000.0) / 1_073_741_824.0
+}
+
+fn print_profile(r: &ProfileReport) {
+    let mb = r.bytes as f64 / 1_048_576.0;
+    println!();
+    println!(
+        "==== profile: {mb:.0} MB across {} executable regions | {} patterns | {} cores ====",
+        r.regions, r.patterns, r.cores
+    );
+    println!();
+    println!("read-only (cross-process copy, no scan):");
+    for (readers, ms) in &r.read_ms {
+        println!(
+            "  {readers} reader(s): {ms:>6} ms  ({:.2} GB/s)",
+            gbps(r.bytes, *ms)
+        );
+    }
+    println!();
+    println!("scan-only on a local buffer (no reads):");
+    println!(
+        "  serial  (1 thread)   : {:>6} ms  ({:.2} GB/s)",
+        r.scan_serial_ms,
+        gbps(r.bytes, r.scan_serial_ms)
+    );
+    println!(
+        "  parallel ({:>2} cores)  : {:>6} ms  ({:.2} GB/s)",
+        r.cores,
+        r.scan_parallel_ms,
+        gbps(r.bytes, r.scan_parallel_ms)
+    );
+    println!("  matches: {}", r.matches);
+    println!();
+    println!(
+        "resolve-only           : {:>6} ms  (_CALL hits doing extra reads: {})",
+        r.resolve_ms, r.call_hits
+    );
+    println!();
+    println!("full pipeline (read + scan + resolve overlapped):");
+    println!(
+        "  default chunk        : {:>6} ms  ({:.2} GB/s end-to-end)",
+        r.full_ms,
+        gbps(r.bytes, r.full_ms)
+    );
+    println!("  chunk-size sweep:");
+    for (size, ms) in &r.chunk_ms {
+        println!("    {:>5} KiB: {ms:>6} ms", size >> 10);
+    }
+    println!();
+    let read1 = r.read_ms.first().map_or(0, |&(_, ms)| ms);
+    println!(
+        "verdict: read(1) {read1} ms | scan(parallel) {} ms | resolve {} ms | full {} ms",
+        r.scan_parallel_ms, r.resolve_ms, r.full_ms
+    );
+    if r.full_ms > 0 && read1 as f64 >= 0.80 * r.full_ms as f64 {
+        println!(
+            "         read-bound: the read alone is ~{:.0}% of the full pipeline; the scan hides under it.",
+            100.0 * read1 as f64 / r.full_ms as f64
+        );
+    } else {
+        println!(
+            "         not purely read-bound: scan/resolve are a meaningful fraction, so matcher work may pay off."
+        );
+    }
 }
 
 fn main() -> ExitCode {
