@@ -42,6 +42,7 @@
           <div class="brand"><img src="logo.png" class="brand-logo" alt="MapleDumper" /></div>
           <nav id="nav">
             <button class="nav-item active" data-view="workspace" data-icon="grid"><span class="ico"></span><span data-i18n="nav.workspace">Workspace</span></button>
+            <button class="nav-item" data-view="asmscan" data-icon="search"><span class="ico"></span><span data-i18n="nav.asmscan">Assembly scan</span></button>
             <button class="nav-item" data-view="patterns" data-icon="file-code"><span class="ico"></span><span data-i18n="nav.patterns">Patterns</span></button>
             <button class="nav-item" data-view="editor" data-icon="terminal"><span class="ico"></span><span data-i18n="nav.editor">Editor</span></button>
             <button class="nav-item" data-view="output" data-icon="database"><span class="ico"></span><span data-i18n="nav.output">Output</span></button>
@@ -209,6 +210,28 @@
                 </div>
                 <button id="open-editor" class="btn btn-soft tall"><span class="ico" data-icon="terminal"></span><span data-i18n="foot.openEditor">Open editor</span></button>
               </footer>
+            </section>
+
+            <section class="view" id="view-asmscan">
+              <div class="simple-head">
+                <div><h2 data-i18n="asm.title">Assembly scan</h2><p class="muted" data-i18n="asm.sub">Find code by instruction, with wildcards</p></div>
+                <div class="head-actions">
+                  <button id="asm-scan" class="btn btn-primary"><span class="ico" data-icon="play"></span><span data-i18n="asm.scan">Scan</span></button>
+                  <button id="asm-stop" class="btn btn-soft" disabled><span class="ico" data-icon="square"></span><span data-i18n="ws.stop">Stop</span></button>
+                </div>
+              </div>
+              <div class="asm-bar">
+                <div id="asm-target" class="asm-target"></div>
+                <label class="asm-range"><span data-i18n="asm.from">From</span><input id="asm-from" type="text" class="mono" spellcheck="false" placeholder="0x…" /></label>
+                <label class="asm-range"><span data-i18n="asm.to">To</span><input id="asm-to" type="text" class="mono" spellcheck="false" placeholder="0x…" /></label>
+              </div>
+              <textarea id="asm-input" class="asm-input mono" spellcheck="false" data-i18n-ph="asm.ph"></textarea>
+              <p class="asm-help muted" data-i18n="asm.help"></p>
+              <div class="panel-tools flat">
+                <div class="results-count" id="asm-count"></div>
+                <div class="search ml-auto"><span class="ico" data-icon="search"></span><input id="asm-search" type="text" data-i18n-ph="asm.filter" placeholder="Filter results…" spellcheck="false" /></div>
+              </div>
+              <div class="panel table-scroll grow" id="asm-results"><div class="insp-hint" data-i18n="asm.empty">Enter assembly lines and press Scan.</div></div>
             </section>
 
             <section class="view" id="view-patterns">

@@ -422,6 +422,55 @@ const ASM_I18N = {
 };
 Object.keys(ASM_I18N).forEach((lang) => Object.assign(I18N[lang], ASM_I18N[lang]));
 
+const ASMSCAN_I18N = {
+  en: {
+    "nav.asmscan": "Assembly scan", "asm.title": "Assembly scan", "asm.sub": "Find code by instruction, with wildcards",
+    "asm.ph": "push\ncall\ntest eax,eax", "asm.scan": "Scan", "asm.from": "From", "asm.to": "To",
+    "asm.help": "Wildcards: * any chars · ? one char · ^ line start · $ line end. Each line is one instruction; matches run consecutively.",
+    "asm.filter": "Filter results…", "asm.empty": "Enter assembly lines and press Scan.", "asm.none": "No matches.",
+    "asm.needLines": "Enter at least one assembly line.", "asm.match": "{n} matches", "asm.matchOne": "1 match",
+    "asm.truncated": "showing first {shown} of {total}", "asm.noTarget": "Set a target in the Workspace first.",
+    "asm.targetSummary": "{target} · {module} · {arch}", "asm.save": "Save as pattern", "asm.running": "Scanning…",
+  },
+  ja: {
+    "nav.asmscan": "アセンブリスキャン", "asm.title": "アセンブリスキャン", "asm.sub": "命令でコードを検索（ワイルドカード対応）",
+    "asm.ph": "push\ncall\ntest eax,eax", "asm.scan": "スキャン", "asm.from": "開始", "asm.to": "終了",
+    "asm.help": "ワイルドカード: * 任意の文字 · ? 1文字 · ^ 行頭 · $ 行末。各行が1命令で、連続して一致します。",
+    "asm.filter": "結果をフィルター…", "asm.empty": "アセンブリ行を入力して「スキャン」を押してください。", "asm.none": "一致なし。",
+    "asm.needLines": "アセンブリ行を1つ以上入力してください。", "asm.match": "{n} 件の一致", "asm.matchOne": "1 件の一致",
+    "asm.truncated": "{total} 件中 {shown} 件を表示", "asm.noTarget": "先にワークスペースで対象を設定してください。",
+    "asm.targetSummary": "{target} · {module} · {arch}", "asm.save": "パターンとして保存", "asm.running": "スキャン中…",
+  },
+  zh: {
+    "nav.asmscan": "汇编扫描", "asm.title": "汇编扫描", "asm.sub": "按指令查找代码（支持通配符）",
+    "asm.ph": "push\ncall\ntest eax,eax", "asm.scan": "扫描", "asm.from": "起始", "asm.to": "结束",
+    "asm.help": "通配符：* 任意字符 · ? 单个字符 · ^ 行首 · $ 行尾。每行一条指令，连续匹配。",
+    "asm.filter": "筛选结果…", "asm.empty": "输入汇编行并点击扫描。", "asm.none": "无匹配。",
+    "asm.needLines": "请至少输入一行汇编。", "asm.match": "{n} 个匹配", "asm.matchOne": "1 个匹配",
+    "asm.truncated": "显示 {total} 中的前 {shown} 个", "asm.noTarget": "请先在工作区设置目标。",
+    "asm.targetSummary": "{target} · {module} · {arch}", "asm.save": "另存为模式", "asm.running": "扫描中…",
+  },
+  ko: {
+    "nav.asmscan": "어셈블리 스캔", "asm.title": "어셈블리 스캔", "asm.sub": "명령어로 코드 찾기 (와일드카드 지원)",
+    "asm.ph": "push\ncall\ntest eax,eax", "asm.scan": "스캔", "asm.from": "시작", "asm.to": "끝",
+    "asm.help": "와일드카드: * 임의 문자 · ? 한 문자 · ^ 줄 시작 · $ 줄 끝. 각 줄은 한 명령어이며 연속으로 일치합니다.",
+    "asm.filter": "결과 필터…", "asm.empty": "어셈블리 줄을 입력하고 스캔을 누르세요.", "asm.none": "일치 항목 없음.",
+    "asm.needLines": "어셈블리 줄을 하나 이상 입력하세요.", "asm.match": "{n}개 일치", "asm.matchOne": "1개 일치",
+    "asm.truncated": "{total}개 중 처음 {shown}개 표시", "asm.noTarget": "먼저 작업 공간에서 대상을 설정하세요.",
+    "asm.targetSummary": "{target} · {module} · {arch}", "asm.save": "패턴으로 저장", "asm.running": "스캔 중…",
+  },
+  he: {
+    "nav.asmscan": "סריקת אסמבלי", "asm.title": "סריקת אסמבלי", "asm.sub": "מצא קוד לפי פקודה, עם תווים כלליים",
+    "asm.ph": "push\ncall\ntest eax,eax", "asm.scan": "סרוק", "asm.from": "מתחילת", "asm.to": "עד",
+    "asm.help": "תווים כלליים: * כל תו · ? תו אחד · ^ תחילת שורה · $ סוף שורה. כל שורה היא פקודה אחת, וההתאמות רצופות.",
+    "asm.filter": "סנן תוצאות…", "asm.empty": "הזן שורות אסמבלי ולחץ על סרוק.", "asm.none": "אין התאמות.",
+    "asm.needLines": "הזן לפחות שורת אסמבלי אחת.", "asm.match": "{n} התאמות", "asm.matchOne": "התאמה אחת",
+    "asm.truncated": "מציג {shown} מתוך {total} הראשונות", "asm.noTarget": "הגדר תחילה יעד בסביבת העבודה.",
+    "asm.targetSummary": "{target} · {module} · {arch}", "asm.save": "שמור כתבנית", "asm.running": "סורק…",
+  },
+};
+Object.keys(ASMSCAN_I18N).forEach((lang) => Object.assign(I18N[lang], ASMSCAN_I18N[lang]));
+
 function t(key, params) {
   const table = I18N[LANG] || I18N.en;
   let s = table[key] != null ? table[key] : I18N.en[key] != null ? I18N.en[key] : key;
@@ -592,13 +641,14 @@ function showView(name) {
   if (name === "patterns") refreshPatterns();
   if (name === "editor") ensureEditor();
   if (name === "history") loadHistory();
+  if (name === "asmscan") asmSyncTarget();
 }
 document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
 $("open-editor").addEventListener("click", () => showView("editor"));
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
     if (currentView === "editor") return;
-    const inp = $({ workspace: "w-search", patterns: "pattern-search", history: "hist-search" }[currentView]);
+    const inp = $({ workspace: "w-search", patterns: "pattern-search", history: "hist-search", asmscan: "asm-search" }[currentView]);
     if (inp) {
       e.preventDefault();
       inp.focus();
@@ -862,6 +912,95 @@ $("w-stop").addEventListener("click", () => {
   setConn("cancelled", "");
   setRing("done", 0);
   setFoot("foot.cancelled", "foot.cancelledSub");
+});
+
+const asmState = { report: null };
+
+function asmSyncTarget() {
+  const target = $("w-target").value.trim();
+  const el = $("asm-target");
+  if (!el) return;
+  if (!target) {
+    el.textContent = t("asm.noTarget");
+    return;
+  }
+  const arch = state.arch === "x64" ? t("ws.arch64") : t("ws.arch32");
+  el.textContent = t("asm.targetSummary", { target, module: $("w-module").value.trim() || target, arch });
+}
+
+async function runAsmScan() {
+  const target = $("w-target").value.trim();
+  if (!target) {
+    toast(t("toast.enterTarget"), true);
+    return;
+  }
+  const lines = $("asm-input").value;
+  if (!lines.trim()) {
+    toast(t("asm.needLines"), true);
+    return;
+  }
+  const req = {
+    locator: state.byClass ? "class" : "name",
+    target,
+    module: $("w-module").value.trim(),
+    arch: state.arch,
+    wait: state.wait,
+    timeout_secs: $("w-timeout").value ? Number($("w-timeout").value) : null,
+    code_only: state.codeOnly,
+    from: $("asm-from").value.trim() || null,
+    to: $("asm-to").value.trim() || null,
+    lines,
+  };
+  $("asm-scan").disabled = true;
+  $("asm-stop").disabled = false;
+  $("asm-count").textContent = t("asm.running");
+  try {
+    const report = await invoke("assembly_scan", { req });
+    asmState.report = report;
+    renderAsmResults(report);
+  } catch (err) {
+    asmState.report = null;
+    $("asm-count").textContent = "";
+    $("asm-results").innerHTML = `<div class="insp-hint">${esc(String(err))}</div>`;
+    toast(String(err), true);
+  } finally {
+    $("asm-scan").disabled = false;
+    $("asm-stop").disabled = true;
+  }
+}
+
+function renderAsmResults(report) {
+  $("asm-count").textContent =
+    (report.total === 1 ? t("asm.matchOne") : t("asm.match", { n: report.total })) +
+    (report.truncated ? " · " + t("asm.truncated", { shown: report.hits.length, total: report.total }) : "");
+  const host = $("asm-results");
+  if (!report.hits.length) {
+    host.innerHTML = `<div class="insp-hint">${t("asm.none")}</div>`;
+    return;
+  }
+  const term = ($("asm-search").value || "").trim().toLowerCase();
+  const hits = term
+    ? report.hits.filter((h) => h.address.toLowerCase().includes(term) || h.lines.join(" ").toLowerCase().includes(term))
+    : report.hits;
+  host.innerHTML = hits
+    .map(
+      (h) =>
+        `<div class="asm-hit"><div class="asm-hit-head"><span class="mono d-addr">${esc(h.address)}</span><span class="asm-rva muted">+${esc(h.rva)}</span><button class="icon-btn asm-save" data-bytes="${esc(h.bytes)}">${esc(t("asm.save"))}</button></div><pre class="asm-lines mono">${h.lines.map(esc).join("\n")}</pre></div>`,
+    )
+    .join("");
+  host.querySelectorAll(".asm-save").forEach((b) => b.addEventListener("click", () => asmSaveAsPattern(b.dataset.bytes)));
+}
+
+function asmSaveAsPattern(bytes) {
+  openModal(-1);
+  $("f-aob").value = bytes;
+  $("f-name").focus();
+}
+
+$("asm-scan").addEventListener("click", runAsmScan);
+$("asm-stop").addEventListener("click", () => invoke("cancel_scan"));
+$("asm-search").addEventListener("input", () => {
+  if (asmState.report) renderAsmResults(asmState.report);
 });
 
 function buildTabs() {
@@ -1677,6 +1816,8 @@ function relocalize() {
   buildTabs();
   renderResults();
   renderPatterns();
+  asmSyncTarget();
+  if (asmState.report) renderAsmResults(asmState.report);
   if (histState.groups.length) {
     renderHistory();
     renderTabs();
