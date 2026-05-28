@@ -64,7 +64,7 @@ const RESOLVE_MARGIN: usize = 24;
 const SCAN_CHUNK: usize = 1 << 18;
 
 #[allow(clippy::uninit_vec)]
-fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
+pub(crate) fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
     let mut buf: Vec<u8> = Vec::with_capacity(len);
     // SAFETY: read_into only writes into the buffer via the OS and never reads it; the length
     // is set to the bytes actually written, so no uninitialized byte is ever exposed.

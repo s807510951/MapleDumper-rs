@@ -38,6 +38,26 @@ pub fn coalesce(mut regions: Vec<Region>) -> Vec<Region> {
     merged
 }
 
+#[must_use]
+pub fn clip_regions(regions: &[Region], from: Option<usize>, to: Option<usize>) -> Vec<Region> {
+    let lo = from.unwrap_or(0);
+    let hi = to.unwrap_or(usize::MAX);
+    if lo >= hi {
+        return Vec::new();
+    }
+    regions
+        .iter()
+        .filter_map(|r| {
+            let start = r.base.max(lo);
+            let end = r.end().min(hi);
+            (start < end).then(|| Region {
+                base: start,
+                size: end - start,
+            })
+        })
+        .collect()
+}
+
 pub struct BufferSource {
     base: usize,
     data: Vec<u8>,
@@ -102,6 +122,18 @@ mod tests {
             coalesce(vec![r(20, 10), r(0, 10), r(10, 10)]),
             vec![r(0, 30)]
         );
+    }
+
+    #[test]
+    fn clip_regions_intersects_with_range() {
+        let regs = [r(0x1000, 0x1000), r(0x3000, 0x1000)];
+        assert_eq!(
+            clip_regions(&regs, Some(0x1800), Some(0x3800)),
+            vec![r(0x1800, 0x800), r(0x3000, 0x800)]
+        );
+        assert_eq!(clip_regions(&regs, None, None), regs.to_vec());
+        assert!(clip_regions(&regs, Some(0x9000), Some(0xA000)).is_empty());
+        assert!(clip_regions(&regs, Some(0x4000), Some(0x1000)).is_empty());
     }
 
     #[test]

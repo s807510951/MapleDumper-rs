@@ -2266,6 +2266,7 @@ name = "maple-core"
 version = "0.1.2"
 dependencies = [
  "criterion",
+ "iced-x86",
  "rayon",
  "windows-sys 0.61.2",
 ]
