@@ -3,11 +3,16 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use serde::Serialize;
+
 use maple_core::output::{cheat_table, offsets_header, plain_text};
 use maple_core::pattern::{Arch, parse_patterns_file};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, Locator, Pattern, ProfileReport, ScanResult, Status,
     Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp, profile, scan,
+};
+use maple_core::{
+    FileImage, ImageInput, SigCandidate, SigOptions, SigReport, TargetKind, TargetSpec, generate,
 };
 
 struct Args {
@@ -27,6 +32,15 @@ struct Args {
     asm: Option<PathBuf>,
     from: Option<String>,
     to: Option<String>,
+    mksig: bool,
+    clients: Vec<PathBuf>,
+    client_dir: Option<PathBuf>,
+    sig: Option<String>,
+    ref_path: Option<PathBuf>,
+    rva: Option<String>,
+    json: bool,
+    json_out: Option<PathBuf>,
+    min_fixed_ratio: Option<f64>,
 }
 
 const HELP: &str = "\
@@ -54,6 +68,17 @@ OUTPUT:
     --asm <file>       scan by assembly instructions (one per line, wildcards * ? ^ $), then exit
     --from <addr>      with --asm, only report matches at or above this address (hex)
     --to <addr>        with --asm, only report matches below this address (hex)
+
+SIGNATURE MAKER (cross-version, reads .exe files on disk; no target needed):
+    --mksig            generate a cross-version signature from client files, then exit
+    --client <exe>     a client binary (repeat for each version)
+    --client-dir <dir> add every .exe in a folder as a client
+    --sig <aob>        target: locate this existing AOB in each client and harden it
+    --ref <exe> --rva <hex>   target: an address in one reference client
+    --min-fixed-ratio <f>     reject signatures below this fixed-byte ratio (default 0.30)
+    --json             print the full report as JSON
+    --json-out <path>  write the JSON report to a file
+    (signature gate defaults: max_len 80 bytes, min_fixed 5, min_fixed_ratio 0.30)
 
     -h, --help         print this help
     -V, --version      print version
@@ -101,6 +126,15 @@ fn parse_args() -> Result<Args, String> {
     let mut asm = None;
     let mut from = None;
     let mut to = None;
+    let mut mksig = false;
+    let mut clients = Vec::new();
+    let mut client_dir = None;
+    let mut sig = None;
+    let mut ref_path = None;
+    let mut rva = None;
+    let mut json = false;
+    let mut json_out = None;
+    let mut min_fixed_ratio = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -124,6 +158,22 @@ fn parse_args() -> Result<Args, String> {
             "--asm" => asm = Some(PathBuf::from(value(&mut it, "--asm")?)),
             "--from" => from = Some(value(&mut it, "--from")?),
             "--to" => to = Some(value(&mut it, "--to")?),
+            "--mksig" => mksig = true,
+            "--client" => clients.push(PathBuf::from(value(&mut it, "--client")?)),
+            "--client-dir" => client_dir = Some(PathBuf::from(value(&mut it, "--client-dir")?)),
+            "--sig" => sig = Some(value(&mut it, "--sig")?),
+            "--ref" => ref_path = Some(PathBuf::from(value(&mut it, "--ref")?)),
+            "--rva" => rva = Some(value(&mut it, "--rva")?),
+            "--json" => json = true,
+            "--json-out" => json_out = Some(PathBuf::from(value(&mut it, "--json-out")?)),
+            "--min-fixed-ratio" => {
+                let raw = value(&mut it, "--min-fixed-ratio")?;
+                min_fixed_ratio = Some(
+                    raw.trim()
+                        .parse()
+                        .map_err(|_| format!("invalid --min-fixed-ratio '{raw}'"))?,
+                );
+            }
             "--timeout" => {
                 let raw = value(&mut it, "--timeout")?;
                 let secs: u64 = raw
@@ -163,6 +213,15 @@ fn parse_args() -> Result<Args, String> {
         asm,
         from,
         to,
+        mksig,
+        clients,
+        client_dir,
+        sig,
+        ref_path,
+        rva,
+        json,
+        json_out,
+        min_fixed_ratio,
     })
 }
 
@@ -214,6 +273,10 @@ fn write_outputs(
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
+
+    if args.mksig {
+        return run_mksig(&args);
+    }
 
     if let Some((old, new)) = &args.diff {
         let old_text =
@@ -489,6 +552,286 @@ fn print_diff(report: &DiffReport) {
     }
 }
 
+fn arch_str(arch: Arch) -> &'static str {
+    if matches!(arch, Arch::X64) {
+        "x64"
+    } else {
+        "x86"
+    }
+}
+
+fn kind_str(kind: TargetKind) -> &'static str {
+    match kind {
+        TargetKind::Code => "code",
+        TargetKind::Data => "data",
+        TargetKind::Import => "import",
+        TargetKind::Unknown => "unknown",
+    }
+}
+
+fn file_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn collect_clients(args: &Args) -> Result<Vec<PathBuf>, String> {
+    let mut clients = args.clients.clone();
+    if let Some(dir) = &args.client_dir {
+        let rd = std::fs::read_dir(dir).map_err(|e| format!("read dir {}: {e}", dir.display()))?;
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")) {
+                clients.push(p);
+            }
+        }
+    }
+    if let Some(r) = &args.ref_path {
+        clients.push(r.clone());
+    }
+    clients.sort();
+    clients.dedup();
+    if clients.is_empty() {
+        return Err("--mksig needs at least one --client or --client-dir".to_string());
+    }
+    Ok(clients)
+}
+
+#[derive(Serialize)]
+struct JPer {
+    label: String,
+    match_rva: Option<String>,
+    resolved_target_rva: Option<String>,
+    target_type: Option<String>,
+}
+#[derive(Serialize)]
+struct JCand {
+    aob: String,
+    suffix: String,
+    grade: String,
+    bytes: usize,
+    fixed: usize,
+    wildcards: usize,
+    fixed_ratio: f64,
+    reloc_safe: bool,
+    per_version: Vec<JPer>,
+    diags: Vec<String>,
+}
+#[derive(Serialize)]
+struct JInput {
+    label: String,
+    packed: bool,
+    reasons: Vec<String>,
+}
+#[derive(Serialize)]
+struct JDup {
+    code_hash: String,
+    labels: Vec<String>,
+}
+#[derive(Serialize)]
+struct JReport {
+    arch: String,
+    unique_builds: usize,
+    inputs: Vec<JInput>,
+    duplicate_groups: Vec<JDup>,
+    chosen: Option<JCand>,
+    alternates: Vec<JCand>,
+    rejected: Vec<JCand>,
+    diagnostics: Vec<String>,
+}
+
+fn jcand(c: &SigCandidate) -> JCand {
+    JCand {
+        aob: c.aob.clone(),
+        suffix: c.suffix.as_str().to_string(),
+        grade: c.grade.letter().to_string(),
+        bytes: c.bytes_len,
+        fixed: c.fixed,
+        wildcards: c.wildcards,
+        fixed_ratio: c.fixed_ratio,
+        reloc_safe: c.reloc_safe,
+        per_version: c
+            .per_version
+            .iter()
+            .map(|p| JPer {
+                label: p.label.clone(),
+                match_rva: p.match_rva.map(|v| format!("0x{v:X}")),
+                resolved_target_rva: p.resolved_target_rva.map(|v| format!("0x{v:X}")),
+                target_type: p.target_kind.map(|k| kind_str(k).to_string()),
+            })
+            .collect(),
+        diags: c.diags.iter().map(|d| d.to_string()).collect(),
+    }
+}
+
+fn json_report(r: &SigReport) -> String {
+    let report = JReport {
+        arch: arch_str(r.arch).to_string(),
+        unique_builds: r.unique_builds,
+        inputs: r
+            .inputs
+            .iter()
+            .map(|i| JInput {
+                label: i.label.clone(),
+                packed: i.packed,
+                reasons: i.reasons.clone(),
+            })
+            .collect(),
+        duplicate_groups: r
+            .duplicate_groups
+            .iter()
+            .map(|g| JDup {
+                code_hash: format!("{:016X}", g.code_hash),
+                labels: g.labels.clone(),
+            })
+            .collect(),
+        chosen: r.chosen.as_ref().map(jcand),
+        alternates: r.alternates.iter().map(jcand).collect(),
+        rejected: r.rejected.iter().map(jcand).collect(),
+        diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
+    };
+    serde_json::to_string_pretty(&report).unwrap_or_default()
+}
+
+fn print_candidate(tag: &str, c: &SigCandidate) {
+    println!(
+        "[{tag}] grade {} {}{}",
+        c.grade.letter(),
+        c.aob,
+        c.suffix.as_str()
+    );
+    println!(
+        "      {} bytes, {} fixed, {} wild, ratio {:.2}, reloc_safe {}",
+        c.bytes_len, c.fixed, c.wildcards, c.fixed_ratio, c.reloc_safe
+    );
+    for p in &c.per_version {
+        let m = p
+            .match_rva
+            .map_or_else(|| "-".to_string(), |v| format!("0x{v:X}"));
+        let t = p
+            .resolved_target_rva
+            .map_or_else(String::new, |v| format!(" -> 0x{v:X}"));
+        println!("        {} @ {m}{t}", p.label);
+    }
+    for d in &c.diags {
+        println!("        ! {d}");
+    }
+}
+
+fn print_sig_report(r: &SigReport, opts: &SigOptions) {
+    println!(
+        "[+] arch {} | {} unique build(s)",
+        arch_str(r.arch),
+        r.unique_builds
+    );
+    println!(
+        "    gates: min_fixed {}, min_fixed_ratio {:.2}, max_len {}",
+        opts.min_fixed, opts.min_fixed_ratio, opts.max_len
+    );
+    for g in &r.duplicate_groups {
+        if g.labels.len() > 1 {
+            println!(
+                "    duplicate build {:016X}: {}",
+                g.code_hash,
+                g.labels.join(", ")
+            );
+        }
+    }
+    match &r.chosen {
+        Some(c) => print_candidate("chosen", c),
+        None => println!("[-] no safe signature found"),
+    }
+    for c in &r.alternates {
+        print_candidate("alt", c);
+    }
+    for c in &r.rejected {
+        print_candidate("rejected", c);
+    }
+    for d in &r.diagnostics {
+        println!("    note: {d}");
+    }
+}
+
+fn run_mksig(args: &Args) -> Result<(), String> {
+    let clients = collect_clients(args)?;
+    let has_sig = args.sig.is_some();
+    let has_ref = args.ref_path.is_some() || args.rva.is_some();
+    if has_sig == has_ref {
+        return Err("provide exactly one of --sig OR (--ref + --rva)".to_string());
+    }
+    if let Some(aob) = &args.sig {
+        maple_core::try_signature_from_aob(aob).map_err(|e| format!("invalid --sig: {e}"))?;
+    }
+
+    let images: Vec<FileImage> = clients
+        .iter()
+        .map(|p| FileImage::open(p).map_err(|e| format!("open {}: {e}", p.display())))
+        .collect::<Result<_, _>>()?;
+    let reports: Vec<_> = images.iter().map(FileImage::pack_report).collect();
+
+    for (p, pr) in clients.iter().zip(&reports) {
+        if pr.likely_packed {
+            eprintln!(
+                "[!] {} looks packed ({}, entropy {:.2}) - generated signatures may be unreliable",
+                p.display(),
+                pr.reasons.join("; "),
+                pr.max_code_entropy
+            );
+        }
+    }
+
+    let mut inputs = Vec::with_capacity(images.len());
+    for (k, img) in images.iter().enumerate() {
+        inputs.push(ImageInput {
+            label: file_label(&clients[k]),
+            source: img,
+            base: img.base(),
+            size: img.size(),
+            code_regions: img.code_regions(),
+            regions: img.regions(),
+            import: img.import_range(),
+            arch: img.arch(),
+            code_hash: img.code_hash(),
+            packed: reports[k].likely_packed,
+            pack_reasons: reports[k].reasons.clone(),
+            reloc: Some(img),
+        });
+    }
+
+    let spec = if let Some(aob) = &args.sig {
+        TargetSpec::Aob(aob.clone())
+    } else {
+        let rva = parse_hex_opt(&args.rva)?.ok_or("--rva <hex> is required with --ref")? as u64;
+        let ref_path = args.ref_path.as_ref().ok_or("--ref <exe> is required")?;
+        let idx = clients
+            .iter()
+            .position(|c| c == ref_path)
+            .ok_or("the --ref file was not opened as a client")?;
+        TargetSpec::Ref { image: idx, rva }
+    };
+
+    let mut opts = SigOptions::default();
+    if let Some(r) = args.min_fixed_ratio {
+        opts.min_fixed_ratio = r;
+    }
+
+    let report = generate(&inputs, &spec, &opts);
+
+    if args.json || args.json_out.is_some() {
+        let json = json_report(&report);
+        if let Some(path) = &args.json_out {
+            std::fs::write(path, &json).map_err(|e| format!("write {}: {e}", path.display()))?;
+            println!("[+] wrote {}", path.display());
+        }
+        if args.json {
+            println!("{json}");
+        }
+    } else {
+        print_sig_report(&report, &opts);
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -496,5 +839,49 @@ fn main() -> ExitCode {
             eprintln!("[error] {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maple_core::{Grade, PerVersion, Suffix};
+
+    #[test]
+    fn json_includes_ptr_target_fields() {
+        let cand = SigCandidate {
+            aob: "48 8D 05 ?? ?? ?? ??".to_string(),
+            suffix: Suffix::Ptr,
+            grade: Grade::A,
+            bytes_len: 7,
+            fixed: 3,
+            wildcards: 4,
+            fixed_ratio: 0.42,
+            reloc_safe: true,
+            per_version: vec![PerVersion {
+                label: "a.exe".to_string(),
+                match_rva: Some(0x20),
+                resolved_target_rva: Some(0x1000),
+                target_kind: Some(TargetKind::Code),
+            }],
+            diags: Vec::new(),
+        };
+        let report = SigReport {
+            arch: Arch::X64,
+            inputs: Vec::new(),
+            unique_builds: 1,
+            duplicate_groups: Vec::new(),
+            chosen: Some(cand.clone()),
+            alternates: vec![cand.clone()],
+            rejected: vec![cand],
+            diagnostics: Vec::new(),
+        };
+        let json = json_report(&report);
+        // present for chosen + one alternate + one rejected
+        assert_eq!(
+            json.matches("\"resolved_target_rva\": \"0x1000\"").count(),
+            3
+        );
+        assert_eq!(json.matches("\"target_type\": \"code\"").count(), 3);
     }
 }

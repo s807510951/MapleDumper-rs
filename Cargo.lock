@@ -2259,6 +2259,8 @@ name = "maple-cli"
 version = "0.1.3"
 dependencies = [
  "maple-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
