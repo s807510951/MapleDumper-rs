@@ -3,6 +3,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod asmscan;
 pub mod categorizer;
 pub mod diff;
+pub mod domain;
 pub mod engine;
 pub mod fileimage;
 pub mod health;
@@ -19,6 +20,7 @@ pub mod process;
 
 pub use asmscan::{AsmHit, AsmPattern, assembly_scan, parse_asm_patterns};
 pub use diff::{DiffReport, Moved, diff, parse_dump};
+pub use domain::{FailureReason, FindingStatus, SectionKind, checked_rva};
 pub use engine::{PatternRow, ProfileReport, ScanResult, Status, profile, scan};
 pub use fileimage::{FileImage, PackReport, RelocKind};
 pub use health::{Lint, lint};

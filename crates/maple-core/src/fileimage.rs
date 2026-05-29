@@ -593,6 +593,29 @@ mod tests {
     }
 
     #[test]
+    fn opens_synthetic_pe_from_disk() {
+        let bytes = build_pe(false, None);
+        let mut path = std::env::temp_dir();
+        path.push(format!("maple_fixture_{}.bin", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let opened = FileImage::open(&path);
+        let _ = std::fs::remove_file(&path);
+        let img = opened.unwrap();
+        assert_eq!(img.base(), 0x1_4000_0000);
+        assert_eq!(img.arch(), Arch::X64);
+        assert_eq!(
+            img.code_regions(),
+            vec![Region {
+                base: 0x1_4000_1000,
+                size: 0x20
+            }]
+        );
+        let mut mz = [0u8; 2];
+        img.read_into(img.base(), &mut mz).unwrap();
+        assert_eq!(&mz, b"MZ");
+    }
+
+    #[test]
     #[ignore = "needs a real on-disk exe; run with --ignored"]
     fn opens_real_exe() {
         let path = Path::new(r"C:\Windows\System32\notepad.exe");
