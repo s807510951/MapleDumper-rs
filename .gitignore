@@ -9,3 +9,6 @@
 
 # Tauri build-time generated ACL/permission schemas
 crates/maple-app/gen/
+
+# Local-only documentation suite (kept off the remote)
+docs/
