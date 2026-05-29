@@ -3,7 +3,7 @@ use crate::memory::{MemorySource, Region};
 use crate::output::Finding;
 use crate::pattern::{Arch, Pattern};
 use crate::resolver::{self, Kind, ResolverSpec};
-use crate::scanner::{self, CompiledPattern};
+use crate::scanner::{self, CompiledPattern, ScannerIndex};
 use rayon::prelude::*;
 use std::hint::black_box;
 use std::time::Instant;
@@ -57,6 +57,10 @@ const RESOLVE_MARGIN: usize = 24;
 // Accept-window size per parallel work unit. Smaller windows load-balance better across cores;
 // profiling a 143 MB module on 16 cores put the knee at 256 KiB (~6x faster than the old 4 MiB).
 const SCAN_CHUNK: usize = 1 << 18;
+// Above this many patterns the per-pattern AVX2 scan (one buffer pass per pattern) is replaced by a
+// single-pass multi-pattern index, so cost grows with the buffer plus matches, not buffer times
+// pattern count. Below it the tuned AVX2 path is kept.
+const MULTI_PATTERN_THRESHOLD: usize = 64;
 
 pub(crate) fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
@@ -140,6 +144,17 @@ where
     let overlap = max_len.max(RESOLVE_MARGIN);
     let block = chunk.max(1);
 
+    // Above a pattern-count threshold, scan each block once with a multi-pattern index instead of
+    // once per pattern; below it the tuned per-pattern AVX2 path is kept.
+    let index = (patterns.len() >= MULTI_PATTERN_THRESHOLD).then(|| {
+        ScannerIndex::build(
+            compiled
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, c))| c.as_ref().map(|cp| (i, cp))),
+        )
+    });
+
     // A few reader threads stream region windows into the channel while the rayon pool scans them.
     // Each hit is kept only by the window covering its start, so a match straddling a boundary is
     // counted once no matter which reader produced it or in what order blocks arrive.
@@ -179,18 +194,12 @@ where
             .par_bridge()
             .flat_map_iter(|(base, accept_len, buf)| {
                 let mut local = Vec::new();
-                for (idx, (kind, compiled)) in compiled.iter().enumerate() {
-                    let Some(cp) = compiled else { continue };
-                    if buf.len() < cp.len() {
-                        continue;
-                    }
-                    for off in scanner::find_all(&buf, cp) {
-                        if off >= accept_len {
-                            continue;
-                        }
+                if let Some(index) = index.as_ref() {
+                    index.scan(&buf, accept_len, |idx, off| {
                         let addr = base + off;
+                        let kind = compiled[idx].0;
                         let outcome = resolve(
-                            *kind,
+                            kind,
                             source,
                             module_base,
                             module_size,
@@ -203,6 +212,33 @@ where
                             addr,
                             outcome,
                         });
+                    });
+                } else {
+                    for (idx, (kind, cp)) in compiled.iter().enumerate() {
+                        let Some(cp) = cp else { continue };
+                        if buf.len() < cp.len() {
+                            continue;
+                        }
+                        for off in scanner::find_all(&buf, cp) {
+                            if off >= accept_len {
+                                continue;
+                            }
+                            let addr = base + off;
+                            let outcome = resolve(
+                                *kind,
+                                source,
+                                module_base,
+                                module_size,
+                                addr,
+                                &buf[off..],
+                                arch,
+                            );
+                            local.push(Hit {
+                                pattern_idx: idx,
+                                addr,
+                                outcome,
+                            });
+                        }
                     }
                 }
                 local
@@ -685,5 +721,29 @@ mod tests {
             result.rows[0].status,
             FindingStatus::FoundAmbiguous { candidates: 6 }
         ));
+    }
+
+    #[test]
+    fn scan_uses_multi_pattern_index_above_threshold() {
+        let base = 0x1000usize;
+        let count = MULTI_PATTERN_THRESHOLD + 4;
+        let mut data = vec![0u8; count * 8];
+        let mut text = String::new();
+        for i in 0..count {
+            let off = i * 8;
+            let b = i as u8;
+            data[off..off + 4].copy_from_slice(&[b, 0xAA, 0x5A, 0xBB]);
+            text.push_str(&format!("P{i} = {b:02X} AA 5A BB\n"));
+        }
+        let source = BufferSource::new(base, data);
+        let regions = [Region {
+            base,
+            size: count * 8,
+        }];
+        let patterns = parse_patterns(&text, Arch::X64);
+
+        let result = scan(&source, base, count * 8, &regions, &patterns, Arch::X64);
+        assert_eq!(result.found.len(), count);
+        assert!(result.not_found.is_empty());
     }
 }

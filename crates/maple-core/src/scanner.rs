@@ -18,11 +18,11 @@ impl CompiledPattern {
             .enumerate()
             .filter(|&(_, &significant)| significant)
             .map(|(i, _)| (i, signature.bytes[i]))
-            .min_by_key(|&(_, byte)| byte_frequency(byte));
+            .min_by_key(|&(_, byte)| byte_frequency(byte))?;
         Some(Self {
             bytes: signature.bytes.clone(),
             mask: signature.mask.clone(),
-            anchor,
+            anchor: Some(anchor),
         })
     }
 
@@ -148,6 +148,60 @@ unsafe fn find_all_avx2(haystack: &[u8], pat: &CompiledPattern) -> Vec<usize> {
     out
 }
 
+struct Anchored<'a> {
+    idx: usize,
+    anchor_pos: usize,
+    pat: &'a CompiledPattern,
+}
+
+/// A multi-pattern index that scans a buffer once for many patterns instead of rescanning it per
+/// pattern. Each pattern is bucketed by its anchor byte; a position whose byte hits a bucket is
+/// verified against only the patterns in that bucket, so the work is proportional to the buffer
+/// plus the matches, not to the buffer times the pattern count.
+pub struct ScannerIndex<'a> {
+    by_anchor: Vec<Vec<Anchored<'a>>>,
+}
+
+impl<'a> ScannerIndex<'a> {
+    #[must_use]
+    pub fn build(patterns: impl Iterator<Item = (usize, &'a CompiledPattern)>) -> Self {
+        let mut by_anchor: Vec<Vec<Anchored<'a>>> = (0..256).map(|_| Vec::new()).collect();
+        for (idx, pat) in patterns {
+            if let Some((anchor_pos, anchor_byte)) = pat.anchor {
+                by_anchor[anchor_byte as usize].push(Anchored {
+                    idx,
+                    anchor_pos,
+                    pat,
+                });
+            }
+        }
+        Self { by_anchor }
+    }
+
+    /// Scan `haystack` once, calling `hit(pattern_idx, start)` for every match whose start is below
+    /// `accept_len`. The set of `(pattern_idx, start)` pairs is identical to running [`find_all`]
+    /// per pattern; only the order differs (callers sort).
+    pub fn scan(&self, haystack: &[u8], accept_len: usize, mut hit: impl FnMut(usize, usize)) {
+        let n = haystack.len();
+        for pos in 0..n {
+            for a in &self.by_anchor[haystack[pos] as usize] {
+                if pos < a.anchor_pos {
+                    continue;
+                }
+                let start = pos - a.anchor_pos;
+                if start >= accept_len {
+                    continue;
+                }
+                if start + a.pat.bytes.len() <= n
+                    && matches_at(&a.pat.bytes, &a.pat.mask, haystack, start)
+                {
+                    hit(a.idx, start);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,11 +266,9 @@ mod tests {
     }
 
     #[test]
-    fn all_wildcard_matches_every_start() {
-        let blob = vec![0u8; 10];
+    fn all_wildcard_is_rejected_at_compile() {
         let s = sig(&[0, 0, 0], &[false, false, false]);
-        let cp = CompiledPattern::new(&s).unwrap();
-        assert_eq!(find_all(&blob, &cp), (0..=7).collect::<Vec<_>>());
+        assert!(CompiledPattern::new(&s).is_none());
     }
 
     #[test]
@@ -248,7 +300,9 @@ mod tests {
             let bytes: Vec<u8> = (0..plen).map(|_| (rng.next_u64() & 0x7) as u8).collect();
             let mask: Vec<bool> = (0..plen).map(|_| rng.next_u64() & 1 == 0).collect();
             let s = sig(&bytes, &mask);
-            let cp = CompiledPattern::new(&s).unwrap();
+            let Some(cp) = CompiledPattern::new(&s) else {
+                continue; // all-wildcard is now rejected at compile
+            };
             assert_eq!(find_all(&haystack, &cp), reference(&haystack, &s), "n={n}");
         }
     }
@@ -270,6 +324,36 @@ mod tests {
                 reference(&haystack, &s),
                 "n={n}"
             );
+        }
+    }
+
+    #[test]
+    fn scanner_index_matches_per_pattern_find_all() {
+        let mut rng = XorShift(0x1234_5678_9ABC_DEF0);
+        for _ in 0..1000 {
+            let n = (rng.next_u64() % 400) as usize + 1;
+            let haystack: Vec<u8> = (0..n).map(|_| (rng.next_u64() & 0x7) as u8).collect();
+            let count = (rng.next_u64() % 6) as usize + 1;
+            let mut cps = Vec::new();
+            for _ in 0..count {
+                let plen = (rng.next_u64() % 8) as usize + 1;
+                let bytes: Vec<u8> = (0..plen).map(|_| (rng.next_u64() & 0x7) as u8).collect();
+                let mut mask: Vec<bool> = (0..plen).map(|_| rng.next_u64() & 1 == 0).collect();
+                mask[0] = true;
+                cps.push(CompiledPattern::new(&sig(&bytes, &mask)).unwrap());
+            }
+            let mut expected: Vec<(usize, usize)> = Vec::new();
+            for (i, cp) in cps.iter().enumerate() {
+                for off in find_all(&haystack, cp) {
+                    expected.push((i, off));
+                }
+            }
+            expected.sort_unstable();
+            let index = ScannerIndex::build(cps.iter().enumerate());
+            let mut actual: Vec<(usize, usize)> = Vec::new();
+            index.scan(&haystack, n, |idx, start| actual.push((idx, start)));
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "n={n}");
         }
     }
 }
