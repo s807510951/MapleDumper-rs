@@ -1,0 +1,132 @@
+// Headless smoke test for the desktop frontend (run: `node crates/maple-app/frontend_test.cjs`).
+// Stubs a DOM, loads app.js, drives the Signature Maker render path, and asserts the HTML.
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+
+const noop = () => {};
+function clStub() {
+  return { toggle: noop, add: noop, remove: noop, contains: () => false };
+}
+function makeEl() {
+  const store = { value: "", dataset: {}, style: {}, classList: clStub() };
+  return new Proxy(function () {}, {
+    get(_t, p) {
+      if (p === "classList") return store.classList;
+      if (p === "dataset") return store.dataset;
+      if (p === "style") return store.style;
+      if (p === "querySelectorAll") return () => [];
+      if (p === "querySelector" || p === "closest") return () => null;
+      if (p === "options" || p === "children") return [];
+      if (p === "parentElement" || p === "nextElementSibling") return null;
+      if (p in store) return store[p];
+      return noop;
+    },
+    set(_t, p, v) {
+      store[p] = v;
+      return true;
+    },
+    apply() {},
+  });
+}
+
+const els = {};
+const byId = (id) => (els[id] ||= makeEl());
+const invoke = (cmd) => (cmd === "engine_version" ? Promise.resolve("test") : Promise.resolve([]));
+const localStorage = { getItem: () => null, setItem: noop, removeItem: noop };
+const MutationObserver = class {
+  observe() {}
+  disconnect() {}
+};
+const sandbox = {
+  window: {
+    __TAURI__: { core: { invoke }, event: { listen: () => Promise.resolve(() => {}) }, window: {}, webviewWindow: {} },
+    localStorage,
+    MutationObserver,
+    addEventListener: noop,
+  },
+  document: {
+    getElementById: byId,
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    createElement: () => makeEl(),
+    addEventListener: noop,
+    documentElement: makeEl(),
+    body: makeEl(),
+  },
+  navigator: { clipboard: { writeText: () => Promise.resolve() } },
+  localStorage,
+  MutationObserver,
+  requestAnimationFrame: (cb) => setTimeout(cb, 0),
+  console,
+  setTimeout,
+  clearTimeout,
+};
+sandbox.window.document = sandbox.document;
+process.on("unhandledRejection", noop);
+
+const driver = `
+;try {
+  sigState.files = [
+    { path: "C:/a.exe", name: "a.exe", arch: "x64", packed: false, reasons: [], max_entropy: 6.1 },
+    { path: "C:/b.exe", name: "b.exe", arch: "x64", packed: true, reasons: ["high entropy 7.90 in .text"], max_entropy: 7.9 },
+  ];
+  renderSigFiles();
+  globalThis.__filesHtml = document.getElementById("sig-files").innerHTML;
+  globalThis.__alertHidden = document.getElementById("sig-alert").hidden;
+  const fakeReport = {
+    arch: "x64", unique_builds: 2,
+    inputs: [ { label: "a.exe", packed: false, reasons: [] }, { label: "b.exe", packed: true, reasons: ["x"] } ],
+    duplicate_groups: [ ["DEADBEEFCAFE0001", ["a.exe", "c.exe"]] ],
+    chosen: { aob: "E8 ?? ?? ?? ?? 48 83 C4 ??", suffix: "_CALL", grade: "A", bytes: 14, fixed: 5, wildcards: 9, fixed_ratio: 0.36, reloc_safe: true, per_version: [ { label: "a.exe", match_rva: "0x23B64", resolved_target_rva: "0x24190", target_type: "code" } ], diags: [] },
+    alternates: [ { aob: "48 89 5C 24 ??", suffix: "", grade: "B", bytes: 5, fixed: 4, wildcards: 1, fixed_ratio: 0.8, reloc_safe: true, per_version: [ { label: "a.exe", match_rva: "0x24190", resolved_target_rva: null, target_type: null } ], diags: [] } ],
+    rejected: [ { aob: "90", suffix: "", grade: "F", bytes: 1, fixed: 1, wildcards: 0, fixed_ratio: 1, reloc_safe: true, per_version: [], diags: ["too few fixed bytes (1)"] } ],
+    diagnostics: ["packed input b.exe: high entropy 7.90 in .text"],
+  };
+  sigState.response = { jobs: [
+    { label: "E8 ?? ?? ?? ?? 48 83 C4 ??", report: fakeReport, cross: null, error: null },
+    { label: "0x24190", report: fakeReport, cross: { expected_rva: "0x24190", matched_rva: "0x24190", agrees: true }, error: null },
+    { label: "zz zz", report: null, cross: null, error: "invalid signature: bad hex byte 'zz'" },
+  ] };
+  renderSigResults();
+  globalThis.__reportHtml = document.getElementById("sig-results").innerHTML;
+} catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
+`;
+
+const code = fs.readFileSync(path.join(__dirname, "frontend", "app.js"), "utf8") + driver;
+try {
+  vm.runInNewContext(code, sandbox, { filename: "app.js" });
+} catch (e) {
+  console.error("LOAD THREW:", e);
+  process.exit(1);
+}
+
+const fails = [];
+const check = (cond, msg) => {
+  if (!cond) fails.push(msg);
+};
+check(!sandbox.__renderError, `render threw: ${sandbox.__renderError}`);
+const files = sandbox.__filesHtml || "";
+check(files.includes("a.exe") && files.includes("b.exe"), "file chips missing names");
+check(files.includes("Unpacked") && files.includes("Packed"), "file chips missing packed/unpacked badges");
+check(files.includes("entropy 7.90"), "packed chip tooltip missing entropy");
+check(sandbox.__alertHidden === false, "packed alert should be visible when a file is packed");
+const rep = sandbox.__reportHtml || "";
+check(rep.includes("E8 ?? ?? ?? ??") && rep.includes("_CALL"), "chosen AOB/suffix missing");
+check(rep.includes(">A<"), "chosen grade badge missing");
+check(rep.includes("0x24190"), "resolved target RVA missing from per-version table");
+check(rep.includes("Alternates") && rep.includes("Rejected"), "alternates/rejected sections missing");
+check(rep.includes("Duplicate builds") && rep.includes("DEADBEEFCAFE0001"), "duplicate-build section missing");
+check(rep.includes("Diagnostics"), "diagnostics section missing");
+check(rep.includes("2 file(s)") && rep.includes("2 unique build(s)"), "input summary missing");
+check(rep.includes("sig-job-n") && rep.includes("#1") && rep.includes("#2"), "per-job framing/numbers missing");
+check(rep.includes("sig-cross-verdict ok") && rep.includes("Resolves to 0x24190 as expected"), "cross verdict missing");
+check(rep.includes("sig-job-err") && rep.includes("bad hex byte"), "job error card missing");
+check(rep.includes("Grade legend"), "grade legend missing");
+
+if (fails.length) {
+  console.error("FRONTEND RENDER TEST FAILED:");
+  for (const f of fails) console.error("  - " + f);
+  process.exit(1);
+}
+console.log("FRONTEND RENDER TEST OK");

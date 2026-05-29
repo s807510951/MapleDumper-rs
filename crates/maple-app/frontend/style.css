@@ -285,7 +285,8 @@ body {
   background: transparent;
   color: var(--t2);
   font-size: 13.5px;
-  text-align: left;
+  line-height: 1.25;
+  text-align: start;
   cursor: pointer;
   transition: background 0.13s, color 0.13s, box-shadow 0.13s;
 }
@@ -620,6 +621,49 @@ button.btn-ico:hover {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.copyable {
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.12s;
+}
+.copyable:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.ctx-menu {
+  position: fixed;
+  min-width: 184px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+  z-index: 60;
+}
+.ctx-menu[hidden] {
+  display: none;
+}
+.ctx-menu button {
+  display: block;
+  width: 100%;
+  text-align: start;
+  border: none;
+  background: transparent;
+  color: var(--t1);
+  padding: 8px 11px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-menu button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.ctx-sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--line);
+}
+
 .work-grid {
   flex: 1;
   min-height: 0;
@@ -895,6 +939,55 @@ button.btn-ico:hover {
 }
 .lang-card .select {
   min-width: 150px;
+}
+.about-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.about-body > p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--t2);
+  line-height: 1.6;
+  max-width: 520px;
+}
+.about-features {
+  margin: 0;
+  padding-inline-start: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--t2);
+  line-height: 1.55;
+}
+.about-meta {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.about-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+}
+.about-key {
+  min-width: 110px;
+  color: var(--t2);
+}
+.about-ver {
+  color: var(--t2);
+  font-size: 13px;
+  font-weight: 500;
+}
+.about-hint {
+  margin: 0;
+  font-size: 12px;
 }
 .settings-list {
   display: flex;
@@ -1891,4 +1984,349 @@ button.btn-ico:hover {
 [dir="rtl"] .asm-save {
   margin-left: 0;
   margin-right: auto;
+}
+
+.sig-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 14px 24px 0;
+  min-height: 28px;
+}
+.sig-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: var(--inset);
+  font-size: 12px;
+}
+.sig-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.sig-badge.ok {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.14);
+}
+.sig-badge.packed {
+  color: var(--red);
+  background: rgba(251, 113, 133, 0.16);
+}
+.sig-chip-x {
+  border: none;
+  background: transparent;
+  color: var(--t3);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+.sig-chip-x:hover {
+  color: var(--t1);
+}
+.sig-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 24px 0;
+  padding: 9px 13px;
+  border-radius: 10px;
+  border: 1px solid rgba(251, 113, 133, 0.4);
+  background: rgba(251, 113, 133, 0.12);
+  color: #ffc9d1;
+  font-size: 12.5px;
+}
+.sig-alert[hidden] {
+  display: none;
+}
+.sig-alert-x {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.75;
+}
+.sig-alert-x:hover {
+  opacity: 1;
+}
+[dir="rtl"] .sig-alert-x {
+  margin-left: 0;
+  margin-right: auto;
+}
+.sig-modes {
+  margin: 12px 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sig-mode-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.sig-mode-row[hidden] {
+  display: none;
+}
+.sig-mode-row .select {
+  height: 38px;
+  border-radius: 11px;
+  border: 1px solid var(--line-2);
+  background: var(--inset);
+  color: var(--t1);
+  padding: 0 12px;
+  font-size: 13px;
+}
+.sig-batch {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 62px;
+  resize: vertical;
+  border-radius: 11px;
+  border: 1px solid var(--line-2);
+  background: var(--inset);
+  color: var(--t1);
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.sig-batch:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+.sig-batch.invalid {
+  border-color: var(--red);
+}
+.sig-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.5px;
+}
+.sig-ref-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+}
+.sig-ref-pick .select {
+  flex: 1;
+}
+.sig-both-opts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sig-both-opts[hidden] {
+  display: none;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--inset);
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--t2);
+  padding: 6px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--line-2);
+}
+[dir="rtl"] .seg-btn + .seg-btn {
+  border-left: none;
+  border-right: 1px solid var(--line-2);
+}
+.seg-btn.active {
+  background: var(--blue-soft);
+  color: var(--blue-hi);
+}
+.sig-summary {
+  padding: 14px 4px 6px;
+  font-size: 12.5px;
+  color: var(--t2);
+}
+.sig-section-h {
+  margin: 16px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sig-cand {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.sig-cand.primary {
+  border-color: rgba(91, 151, 249, 0.4);
+  background: var(--surface-2);
+}
+.sig-cand-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sig-grade {
+  font-weight: 700;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  font-size: 13px;
+}
+.sig-grade.g-a {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.16);
+}
+.sig-grade.g-b {
+  color: var(--blue-hi);
+  background: var(--blue-soft);
+}
+.sig-grade.g-c {
+  color: var(--amber);
+  background: rgba(251, 191, 36, 0.16);
+}
+.sig-grade.g-d {
+  color: var(--violet);
+  background: rgba(167, 139, 250, 0.16);
+}
+.sig-grade.g-f {
+  color: var(--red);
+  background: rgba(251, 113, 133, 0.16);
+}
+.sig-tag {
+  font-size: 11px;
+  color: var(--t2);
+}
+.sig-aob {
+  flex: 1;
+  min-width: 180px;
+  word-break: break-all;
+  color: var(--violet);
+  font-size: 12.5px;
+}
+.sig-actions {
+  display: flex;
+  gap: 6px;
+}
+.sig-stats {
+  font-size: 11.5px;
+  margin: 6px 0 8px;
+}
+.sig-pv {
+  font-size: 12px;
+}
+.sig-pv th {
+  padding: 5px 10px;
+}
+.sig-pv td {
+  padding: 5px 10px;
+}
+.sig-diags {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--amber);
+  font-size: 12px;
+}
+.sig-jsonview {
+  margin: 0;
+  padding: 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--t1);
+  white-space: pre;
+  overflow: auto;
+}
+.sig-job {
+  margin-bottom: 8px;
+}
+.sig-job.framed {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 10px 14px 12px;
+  margin-bottom: 12px;
+}
+.sig-job-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.sig-job-n {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--t3);
+}
+.sig-job-label {
+  font-size: 12.5px;
+  color: var(--t1);
+  word-break: break-all;
+}
+.sig-job-err {
+  color: #ffc9d1;
+  font-size: 12.5px;
+  padding: 4px 0;
+}
+.sig-cross-verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+.sig-cross-verdict.ok {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+.sig-cross-verdict.bad {
+  color: #ffc9d1;
+  background: rgba(251, 113, 133, 0.12);
+  border: 1px solid rgba(251, 113, 133, 0.4);
+}
+[dir="rtl"] .sig-diags {
+  padding-left: 0;
+  padding-right: 18px;
+}
+.sig-legend {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.sig-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--t2);
+}
+.sig-legend .sig-grade {
+  flex: none;
 }

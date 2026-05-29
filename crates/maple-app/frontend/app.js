@@ -13,7 +13,7 @@ const I18N = {
     "ws.results": "Results", "ws.resultsSub": "Pattern matches grouped by category", "ws.tabAll": "All", "ws.searchResults": "Search by name or address…",
     "ws.empty": "No scan yet. Set a target and click Start Scan.", "ws.emptyFilter": "No rows match this filter.",
     "ws.builtinSamples": "Built-in samples", "ws.windowClassPh": "Window class name", "ws.loadFileTitle": "Load a pattern file",
-    "col.name": "Name", "col.address": "Address (RVA)", "col.signature": "Signature", "col.status": "Status", "col.type": "Type", "col.hits": "Hits", "col.kind": "Kind", "col.category": "Category", "col.note": "Note",
+    "col.name": "Name", "col.address": "Address (RVA)", "col.signature": "Signature", "col.status": "Status", "col.type": "Type", "col.hits": "Hits", "col.category": "Category", "col.note": "Note",
     "insp.noSelection": "No selection", "insp.selectRow": "Select a row to inspect it.", "insp.hint": "Run a scan, then select a result to inspect its metadata and hit count.",
     "insp.rva": "RVA", "insp.absolute": "Absolute", "insp.signature": "Signature", "insp.type": "Type", "insp.category": "Category", "insp.module": "Module", "insp.hitCount": "Hit count", "insp.notes": "Notes", "insp.noNotes": "No notes", "insp.copyAddress": "Copy address", "insp.displacement": "displacement",
     "foot.idle": "Idle", "foot.idleSub": "Configure a target to begin.", "foot.waiting": "Waiting for target…", "foot.waitingSub": "Will attach the moment it appears.",
@@ -25,7 +25,7 @@ const I18N = {
     "pat.title": "Patterns", "pat.count": "{n} patterns", "pat.countOne": "1 pattern", "pat.add": "+ Add", "pat.load": "Load", "pat.save": "Save", "pat.filter": "Filter patterns…", "pat.allCategories": "All categories", "pat.empty": "No patterns. Use + Add or load a file.", "pat.edit": "edit", "pat.del": "del",
     "res.count": "{n} results", "res.countOne": "1 result",
     "ed.title": "Editor", "ed.sub": "Syntax-highlighted pattern editor", "ed.load": "Load", "ed.save": "Save", "ed.apply": "Apply", "ed.loading": "loading editor…",
-    "out.title": "Output", "out.nothing": "Nothing generated yet", "out.copy": "Copy", "out.save": "Save", "out.default": "Run a scan, then export from the Workspace toolbar.", "out.label": "{name} · {n} lines",
+    "out.title": "Output", "out.nothing": "No export yet", "out.copy": "Copy", "out.save": "Save", "out.default": "Run a scan, then export from the Workspace toolbar.", "out.label": "{name} · {n} lines",
     "set.title": "Settings", "set.sub": "Privacy mask and display options", "set.maskTitle": "Privacy mask",
     "set.maskDesc": "Choose what the eye button in the title bar blurs for screenshots. It applies across every tab, and never changes your data; only the on-screen display is hidden.",
     "set.sig": "Signatures", "set.sigDesc": "AOB byte patterns in tables, the inspector, and the edit dialog",
@@ -47,7 +47,7 @@ const I18N = {
     "ws.results": "結果", "ws.resultsSub": "カテゴリ別のパターン一致", "ws.tabAll": "すべて", "ws.searchResults": "名前またはアドレスで検索…",
     "ws.empty": "まだスキャンしていません。対象を設定して「スキャン開始」をクリックしてください。", "ws.emptyFilter": "このフィルターに一致する行はありません。",
     "ws.builtinSamples": "組み込みサンプル", "ws.windowClassPh": "ウィンドウクラス名", "ws.loadFileTitle": "パターンファイルを読み込む",
-    "col.name": "名前", "col.address": "アドレス (RVA)", "col.signature": "シグネチャ", "col.status": "ステータス", "col.type": "種類", "col.hits": "ヒット", "col.kind": "種別", "col.category": "カテゴリ", "col.note": "メモ",
+    "col.name": "名前", "col.address": "アドレス (RVA)", "col.signature": "シグネチャ", "col.status": "ステータス", "col.type": "種類", "col.hits": "ヒット", "col.category": "カテゴリ", "col.note": "メモ",
     "insp.noSelection": "選択なし", "insp.selectRow": "行を選択して詳細を表示します。", "insp.hint": "スキャンを実行し、結果を選択するとメタデータとヒット数を確認できます。",
     "insp.rva": "RVA", "insp.absolute": "絶対アドレス", "insp.signature": "シグネチャ", "insp.type": "種類", "insp.category": "カテゴリ", "insp.module": "モジュール", "insp.hitCount": "ヒット数", "insp.notes": "メモ", "insp.noNotes": "メモなし", "insp.copyAddress": "アドレスをコピー", "insp.displacement": "変位",
     "foot.idle": "アイドル", "foot.idleSub": "対象を設定して開始してください。", "foot.waiting": "対象を待機中…", "foot.waitingSub": "起動した瞬間にアタッチします。",
@@ -59,7 +59,7 @@ const I18N = {
     "pat.title": "パターン", "pat.count": "{n} 件のパターン", "pat.countOne": "1 件のパターン", "pat.add": "+ 追加", "pat.load": "読み込み", "pat.save": "保存", "pat.filter": "パターンをフィルター…", "pat.allCategories": "すべてのカテゴリ", "pat.empty": "パターンがありません。「+ 追加」またはファイルを読み込んでください。", "pat.edit": "編集", "pat.del": "削除",
     "res.count": "{n} 件の結果", "res.countOne": "1 件の結果",
     "ed.title": "エディタ", "ed.sub": "構文ハイライト付きパターンエディタ", "ed.load": "読み込み", "ed.save": "保存", "ed.apply": "適用", "ed.loading": "エディタを読み込み中…",
-    "out.title": "出力", "out.nothing": "まだ生成されていません", "out.copy": "コピー", "out.save": "保存", "out.default": "スキャンを実行し、ワークスペースのツールバーからエクスポートしてください。", "out.label": "{name} · {n} 行",
+    "out.title": "出力", "out.nothing": "まだエクスポートがありません", "out.copy": "コピー", "out.save": "保存", "out.default": "スキャンを実行し、ワークスペースのツールバーからエクスポートしてください。", "out.label": "{name} · {n} 行",
     "set.title": "設定", "set.sub": "プライバシーマスクと表示オプション", "set.maskTitle": "プライバシーマスク",
     "set.maskDesc": "タイトルバーの目アイコンがスクリーンショット用にぼかす項目を選択します。すべてのタブに適用され、データは変更されず、画面表示のみが隠されます。",
     "set.sig": "シグネチャ", "set.sigDesc": "テーブル、インスペクター、編集ダイアログの AOB バイトパターン",
@@ -81,7 +81,7 @@ const I18N = {
     "ws.results": "结果", "ws.resultsSub": "按类别分组的匹配结果", "ws.tabAll": "全部", "ws.searchResults": "按名称或地址搜索…",
     "ws.empty": "尚未扫描。设置目标后点击开始扫描。", "ws.emptyFilter": "没有符合此筛选的行。",
     "ws.builtinSamples": "内置示例", "ws.windowClassPh": "窗口类名", "ws.loadFileTitle": "加载模式文件",
-    "col.name": "名称", "col.address": "地址 (RVA)", "col.signature": "特征码", "col.status": "状态", "col.type": "类型", "col.hits": "命中", "col.kind": "种类", "col.category": "类别", "col.note": "备注",
+    "col.name": "名称", "col.address": "地址 (RVA)", "col.signature": "特征码", "col.status": "状态", "col.type": "类型", "col.hits": "命中", "col.category": "类别", "col.note": "备注",
     "insp.noSelection": "未选择", "insp.selectRow": "选择一行以查看详情。", "insp.hint": "运行扫描后，选择结果即可查看其元数据和命中次数。",
     "insp.rva": "RVA", "insp.absolute": "绝对地址", "insp.signature": "特征码", "insp.type": "类型", "insp.category": "类别", "insp.module": "模块", "insp.hitCount": "命中次数", "insp.notes": "备注", "insp.noNotes": "无备注", "insp.copyAddress": "复制地址", "insp.displacement": "偏移",
     "foot.idle": "空闲", "foot.idleSub": "配置目标以开始。", "foot.waiting": "等待目标中…", "foot.waitingSub": "一旦出现将立即附加。",
@@ -93,7 +93,7 @@ const I18N = {
     "pat.title": "模式", "pat.count": "{n} 个模式", "pat.countOne": "1 个模式", "pat.add": "+ 添加", "pat.load": "加载", "pat.save": "保存", "pat.filter": "筛选模式…", "pat.allCategories": "所有类别", "pat.empty": "没有模式。使用 + 添加 或加载文件。", "pat.edit": "编辑", "pat.del": "删除",
     "res.count": "{n} 个结果", "res.countOne": "1 个结果",
     "ed.title": "编辑器", "ed.sub": "语法高亮的模式编辑器", "ed.load": "加载", "ed.save": "保存", "ed.apply": "应用", "ed.loading": "正在加载编辑器…",
-    "out.title": "输出", "out.nothing": "尚未生成任何内容", "out.copy": "复制", "out.save": "保存", "out.default": "运行扫描后，从工作区工具栏导出。", "out.label": "{name} · {n} 行",
+    "out.title": "输出", "out.nothing": "尚无导出", "out.copy": "复制", "out.save": "保存", "out.default": "运行扫描后，从工作区工具栏导出。", "out.label": "{name} · {n} 行",
     "set.title": "设置", "set.sub": "隐私遮罩与显示选项", "set.maskTitle": "隐私遮罩",
     "set.maskDesc": "选择标题栏的眼睛按钮在截图时模糊哪些内容。它适用于所有标签页，不会更改你的数据，仅隐藏屏幕显示。",
     "set.sig": "特征码", "set.sigDesc": "表格、检查器和编辑对话框中的 AOB 字节模式",
@@ -115,7 +115,7 @@ const I18N = {
     "ws.results": "결과", "ws.resultsSub": "카테고리별 패턴 일치", "ws.tabAll": "전체", "ws.searchResults": "이름 또는 주소로 검색…",
     "ws.empty": "아직 스캔하지 않았습니다. 대상을 설정하고 스캔 시작을 클릭하세요.", "ws.emptyFilter": "이 필터와 일치하는 행이 없습니다.",
     "ws.builtinSamples": "기본 제공 샘플", "ws.windowClassPh": "윈도우 클래스 이름", "ws.loadFileTitle": "패턴 파일 불러오기",
-    "col.name": "이름", "col.address": "주소 (RVA)", "col.signature": "시그니처", "col.status": "상태", "col.type": "유형", "col.hits": "적중", "col.kind": "종류", "col.category": "카테고리", "col.note": "메모",
+    "col.name": "이름", "col.address": "주소 (RVA)", "col.signature": "시그니처", "col.status": "상태", "col.type": "유형", "col.hits": "적중", "col.category": "카테고리", "col.note": "메모",
     "insp.noSelection": "선택 없음", "insp.selectRow": "행을 선택하면 자세히 볼 수 있습니다.", "insp.hint": "스캔을 실행한 다음 결과를 선택하면 메타데이터와 적중 횟수를 확인할 수 있습니다.",
     "insp.rva": "RVA", "insp.absolute": "절대 주소", "insp.signature": "시그니처", "insp.type": "유형", "insp.category": "카테고리", "insp.module": "모듈", "insp.hitCount": "적중 횟수", "insp.notes": "메모", "insp.noNotes": "메모 없음", "insp.copyAddress": "주소 복사", "insp.displacement": "변위",
     "foot.idle": "대기", "foot.idleSub": "시작하려면 대상을 설정하세요.", "foot.waiting": "대상 대기 중…", "foot.waitingSub": "나타나는 즉시 연결합니다.",
@@ -127,7 +127,7 @@ const I18N = {
     "pat.title": "패턴", "pat.count": "패턴 {n}개", "pat.countOne": "패턴 1개", "pat.add": "+ 추가", "pat.load": "불러오기", "pat.save": "저장", "pat.filter": "패턴 필터…", "pat.allCategories": "모든 카테고리", "pat.empty": "패턴이 없습니다. + 추가를 사용하거나 파일을 불러오세요.", "pat.edit": "편집", "pat.del": "삭제",
     "res.count": "결과 {n}개", "res.countOne": "결과 1개",
     "ed.title": "편집기", "ed.sub": "구문 강조 패턴 편집기", "ed.load": "불러오기", "ed.save": "저장", "ed.apply": "적용", "ed.loading": "편집기 로딩 중…",
-    "out.title": "출력", "out.nothing": "아직 생성된 항목 없음", "out.copy": "복사", "out.save": "저장", "out.default": "스캔을 실행한 다음 작업 공간 도구 모음에서 내보내세요.", "out.label": "{name} · {n}줄",
+    "out.title": "출력", "out.nothing": "아직 내보낸 항목 없음", "out.copy": "복사", "out.save": "저장", "out.default": "스캔을 실행한 다음 작업 공간 도구 모음에서 내보내세요.", "out.label": "{name} · {n}줄",
     "set.title": "설정", "set.sub": "개인정보 마스크 및 표시 옵션", "set.maskTitle": "개인정보 마스크",
     "set.maskDesc": "제목 표시줄의 눈 버튼이 스크린샷을 위해 흐리게 처리할 항목을 선택하세요. 모든 탭에 적용되며 데이터를 변경하지 않고 화면 표시만 가립니다.",
     "set.sig": "시그니처", "set.sigDesc": "테이블, 인스펙터, 편집 대화상자의 AOB 바이트 패턴",
@@ -149,7 +149,7 @@ const I18N = {
     "ws.results": "תוצאות", "ws.resultsSub": "התאמות תבנית מקובצות לפי קטגוריה", "ws.tabAll": "הכול", "ws.searchResults": "חיפוש לפי שם או כתובת…",
     "ws.empty": "עדיין לא בוצעה סריקה. הגדר יעד ולחץ על התחל סריקה.", "ws.emptyFilter": "אין שורות התואמות למסנן זה.",
     "ws.builtinSamples": "דוגמאות מובנות", "ws.windowClassPh": "שם מחלקת חלון", "ws.loadFileTitle": "טען קובץ תבניות",
-    "col.name": "שם", "col.address": "כתובת (RVA)", "col.signature": "חתימה", "col.status": "סטטוס", "col.type": "סוג", "col.hits": "התאמות", "col.kind": "סוג", "col.category": "קטגוריה", "col.note": "הערה",
+    "col.name": "שם", "col.address": "כתובת (RVA)", "col.signature": "חתימה", "col.status": "סטטוס", "col.type": "סוג", "col.hits": "התאמות", "col.category": "קטגוריה", "col.note": "הערה",
     "insp.noSelection": "אין בחירה", "insp.selectRow": "בחר שורה כדי לבדוק אותה.", "insp.hint": "הרץ סריקה ובחר תוצאה כדי לראות את המטא-נתונים ומספר ההתאמות שלה.",
     "insp.rva": "RVA", "insp.absolute": "כתובת מוחלטת", "insp.signature": "חתימה", "insp.type": "סוג", "insp.category": "קטגוריה", "insp.module": "מודול", "insp.hitCount": "מספר התאמות", "insp.notes": "הערות", "insp.noNotes": "אין הערות", "insp.copyAddress": "העתק כתובת", "insp.displacement": "היסט",
     "foot.idle": "במנוחה", "foot.idleSub": "הגדר יעד כדי להתחיל.", "foot.waiting": "ממתין ליעד…", "foot.waitingSub": "יתחבר ברגע שהיעד יופיע.",
@@ -161,7 +161,7 @@ const I18N = {
     "pat.title": "תבניות", "pat.count": "{n} תבניות", "pat.countOne": "תבנית אחת", "pat.add": "+ הוסף", "pat.load": "טען", "pat.save": "שמור", "pat.filter": "סנן תבניות…", "pat.allCategories": "כל הקטגוריות", "pat.empty": "אין תבניות. השתמש ב-+ הוסף או טען קובץ.", "pat.edit": "ערוך", "pat.del": "מחק",
     "res.count": "{n} תוצאות", "res.countOne": "תוצאה אחת",
     "ed.title": "עורך", "ed.sub": "עורך תבניות עם הדגשת תחביר", "ed.load": "טען", "ed.save": "שמור", "ed.apply": "החל", "ed.loading": "טוען עורך…",
-    "out.title": "פלט", "out.nothing": "עדיין לא נוצר דבר", "out.copy": "העתק", "out.save": "שמור", "out.default": "הרץ סריקה ולאחר מכן ייצא מסרגל הכלים של סביבת העבודה.", "out.label": "{name} · {n} שורות",
+    "out.title": "פלט", "out.nothing": "עדיין אין ייצוא", "out.copy": "העתק", "out.save": "שמור", "out.default": "הרץ סריקה ולאחר מכן ייצא מסרגל הכלים של סביבת העבודה.", "out.label": "{name} · {n} שורות",
     "set.title": "הגדרות", "set.sub": "מסכת פרטיות ואפשרויות תצוגה", "set.maskTitle": "מסכת פרטיות",
     "set.maskDesc": "בחר מה כפתור העין בשורת הכותרת יטשטש עבור צילומי מסך. חל על כל הלשוניות, אינו משנה את הנתונים ומסתיר רק את התצוגה על המסך.",
     "set.sig": "חתימות", "set.sigDesc": "תבניות בתים (AOB) בטבלאות, במפקח ובתיבת העריכה",
@@ -460,7 +460,7 @@ const ASMSCAN_I18N = {
     "asm.targetSummary": "{target} · {module} · {arch}", "asm.save": "패턴으로 저장", "asm.running": "스캔 중…",
   },
   he: {
-    "nav.asmscan": "סריקת אסמבלי", "asm.title": "סריקת אסמבלי", "asm.sub": "מצא קוד לפי פקודה, עם תווים כלליים",
+    "nav.asmscan": "סריקה לפי פקודות", "asm.title": "סריקה לפי פקודות", "asm.sub": "מצא קוד לפי פקודה, עם תווים כלליים",
     "asm.ph": "push\ncall\ntest eax,eax", "asm.scan": "סרוק", "asm.from": "מתחילת", "asm.to": "עד",
     "asm.help": "תווים כלליים: * כל תו · ? תו אחד · ^ תחילת שורה · $ סוף שורה. כל שורה היא פקודה אחת, וההתאמות רצופות.",
     "asm.filter": "סנן תוצאות…", "asm.empty": "הזן שורות אסמבלי ולחץ על סרוק.", "asm.none": "אין התאמות.",
@@ -470,6 +470,258 @@ const ASMSCAN_I18N = {
   },
 };
 Object.keys(ASMSCAN_I18N).forEach((lang) => Object.assign(I18N[lang], ASMSCAN_I18N[lang]));
+
+const SIG_I18N = {
+  en: {
+    "nav.sigmaker": "Signature maker", "sig.title": "Signature maker", "sig.sub": "Generate a cross-version signature from client files",
+    "sig.pick": "Pick files", "sig.generate": "Generate", "sig.json": "JSON", "sig.modeAob": "From signature", "sig.modeRef": "From address",
+    "sig.aobPh": "48 8B ?? ?? ?? ??  (an existing AOB to harden)", "sig.rvaPh": "0x… (RVA in the reference)",
+    "sig.empty": "Add client files and choose a target, then Generate.", "sig.generating": "Generating…", "sig.noFiles": "Pick at least one client file.",
+    "sig.needAob": "Enter a signature to harden.", "sig.needRva": "Choose a reference client and enter an RVA.", "sig.none": "No safe signature found.",
+    "sig.unpacked": "Unpacked", "sig.packed": "Packed", "sig.packedAlert": "One or more selected binaries look packed. Signatures built from them may be unreliable, so use an unpacked or dumped image.",
+    "sig.chosen": "Chosen", "sig.alternates": "Alternates", "sig.rejected": "Rejected", "sig.copy": "Copy", "sig.save": "Save as pattern",
+    "sig.builds": "{n} unique build(s)", "sig.grade": "Grade", "sig.bytesFixed": "{bytes} bytes · {fixed} fixed · {wild} wild · {ratio}",
+    "sig.colVersion": "Version", "sig.colMatch": "Match RVA", "sig.colTarget": "Resolved target",
+    "sig.refColumn": "reference", "sig.diagnostics": "Diagnostics", "sig.saved": "Added to pattern list",
+    "sig.summary": "{arch} · {files} file(s) · {builds} unique build(s)", "sig.dupBuilds": "Duplicate builds",
+    "sig.gradeLegend": "Grade legend",
+    "sig.gradeA": "Content-validated anchor, relocation-safe.", "sig.gradeB": "Relocation-safe, not content-validated.",
+    "sig.gradeC": "Weak: absolute or unresolved reference, or cross-build mismatch.", "sig.gradeD": "An input looks packed or protected; provisional.",
+    "sig.gradeF": "Rejected: too few fixed bytes, low ratio, or unsupported relocation.",
+    "sig.modeBoth": "Both", "sig.separate": "Separate", "sig.cross": "Cross-validate",
+    "sig.separateHint": "Signature and address are independent targets.",
+    "sig.crossHint": "Each signature must resolve to the address on the same line.",
+    "sig.aobLabel": "Signatures (one per line)", "sig.refLabel": "Reference client", "sig.rvaLabel": "Addresses, RVA (one per line)",
+    "sig.loadFile": "Load file", "sig.loadedLines": "Loaded {n} line(s)", "sig.dismiss": "Dismiss", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.crossOk": "Resolves to {rva} as expected.", "sig.crossMismatch": "Resolves to {got}, expected {expected}.",
+    "sig.crossNoMatch": "no match", "sig.crossUneven": "{sigs} signature(s) and {rvas} address(es); extra lines are ignored.",
+  },
+  ja: {
+    "nav.sigmaker": "シグネチャメーカー", "sig.title": "シグネチャメーカー", "sig.sub": "クライアントファイルからバージョン横断シグネチャを生成",
+    "sig.pick": "ファイルを選択", "sig.generate": "生成", "sig.json": "JSON", "sig.modeAob": "シグネチャから", "sig.modeRef": "アドレスから",
+    "sig.aobPh": "48 8B ?? ?? ?? ??（強化する既存のAOB）", "sig.rvaPh": "0x…（参照内のRVA）",
+    "sig.empty": "クライアントファイルと対象を選び、「生成」を押してください。", "sig.generating": "生成中…", "sig.noFiles": "クライアントファイルを1つ以上選択してください。",
+    "sig.needAob": "強化するシグネチャを入力してください。", "sig.needRva": "参照クライアントを選びRVAを入力してください。", "sig.none": "安全なシグネチャが見つかりません。",
+    "sig.unpacked": "非パック", "sig.packed": "パック", "sig.packedAlert": "選択したバイナリの一部はパックされている可能性があります。生成されたシグネチャは信頼できない場合があります。展開済みのイメージを使用してください。",
+    "sig.chosen": "採用", "sig.alternates": "代替", "sig.rejected": "却下", "sig.copy": "コピー", "sig.save": "パターンとして保存",
+    "sig.builds": "{n} 個の一意ビルド", "sig.grade": "評価", "sig.bytesFixed": "{bytes} バイト · 固定 {fixed} · ワイルド {wild} · {ratio}",
+    "sig.colVersion": "バージョン", "sig.colMatch": "一致 RVA", "sig.colTarget": "解決先",
+    "sig.refColumn": "参照", "sig.diagnostics": "診断", "sig.saved": "パターン一覧に追加しました",
+    "sig.summary": "{arch} · {files} ファイル · {builds} 個の一意ビルド", "sig.dupBuilds": "重複ビルド",
+    "sig.gradeLegend": "評価の凡例",
+    "sig.gradeA": "内容検証済みのアンカー。再配置に安全。", "sig.gradeB": "再配置に安全だが内容は未検証。",
+    "sig.gradeC": "弱い。絶対参照または未解決の参照、もしくはビルド間の不一致。", "sig.gradeD": "入力がパックまたは保護されている可能性。暫定。",
+    "sig.gradeF": "却下。固定バイト不足、低い比率、または未対応の再配置。",
+    "sig.modeBoth": "両方", "sig.separate": "個別", "sig.cross": "相互検証",
+    "sig.separateHint": "シグネチャとアドレスは独立した対象です。",
+    "sig.crossHint": "各シグネチャは同じ行のアドレスに解決する必要があります。",
+    "sig.aobLabel": "シグネチャ（1行に1つ）", "sig.refLabel": "参照クライアント", "sig.rvaLabel": "アドレス、RVA（1行に1つ）",
+    "sig.loadFile": "ファイルを読み込み", "sig.loadedLines": "{n} 行を読み込みました", "sig.dismiss": "閉じる", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.crossOk": "期待どおり {rva} に解決しました。", "sig.crossMismatch": "{got} に解決しました。期待値は {expected} です。",
+    "sig.crossNoMatch": "一致なし", "sig.crossUneven": "シグネチャ {sigs} 個、アドレス {rvas} 個。余分な行は無視されます。",
+  },
+  zh: {
+    "nav.sigmaker": "特征码生成器", "sig.title": "特征码生成器", "sig.sub": "从客户端文件生成跨版本特征码",
+    "sig.pick": "选择文件", "sig.generate": "生成", "sig.json": "JSON", "sig.modeAob": "从特征码", "sig.modeRef": "从地址",
+    "sig.aobPh": "48 8B ?? ?? ?? ??（要强化的现有 AOB）", "sig.rvaPh": "0x…（参考中的 RVA）",
+    "sig.empty": "选择客户端文件和目标，然后点击生成。", "sig.generating": "生成中…", "sig.noFiles": "请至少选择一个客户端文件。",
+    "sig.needAob": "请输入要强化的特征码。", "sig.needRva": "请选择参考客户端并输入 RVA。", "sig.none": "未找到安全的特征码。",
+    "sig.unpacked": "未加壳", "sig.packed": "已加壳", "sig.packedAlert": "选中的某些二进制文件可能已加壳，由它们生成的特征码可能不可靠；请使用未加壳或已转储的映像。",
+    "sig.chosen": "已选", "sig.alternates": "备选", "sig.rejected": "已拒绝", "sig.copy": "复制", "sig.save": "另存为模式",
+    "sig.builds": "{n} 个唯一版本", "sig.grade": "等级", "sig.bytesFixed": "{bytes} 字节 · {fixed} 固定 · {wild} 通配 · {ratio}",
+    "sig.colVersion": "版本", "sig.colMatch": "匹配 RVA", "sig.colTarget": "解析目标",
+    "sig.refColumn": "参考", "sig.diagnostics": "诊断", "sig.saved": "已添加到模式列表",
+    "sig.summary": "{arch} · {files} 个文件 · {builds} 个唯一版本", "sig.dupBuilds": "重复版本",
+    "sig.gradeLegend": "等级图例",
+    "sig.gradeA": "经内容验证的锚点，重定位安全。", "sig.gradeB": "重定位安全，但未经内容验证。",
+    "sig.gradeC": "较弱：绝对或未解析的引用，或跨版本不一致。", "sig.gradeD": "某个输入可能已加壳或受保护；暂定。",
+    "sig.gradeF": "已拒绝：固定字节过少、比率过低或不支持的重定位。",
+    "sig.modeBoth": "两者", "sig.separate": "分别", "sig.cross": "交叉验证",
+    "sig.separateHint": "特征码和地址是独立的目标。",
+    "sig.crossHint": "每个特征码必须解析到同一行的地址。",
+    "sig.aobLabel": "特征码（每行一个）", "sig.refLabel": "参考客户端", "sig.rvaLabel": "地址，RVA（每行一个）",
+    "sig.loadFile": "加载文件", "sig.loadedLines": "已加载 {n} 行", "sig.dismiss": "关闭", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.crossOk": "按预期解析到 {rva}。", "sig.crossMismatch": "解析到 {got}，预期为 {expected}。",
+    "sig.crossNoMatch": "无匹配", "sig.crossUneven": "{sigs} 个特征码，{rvas} 个地址；多余的行将被忽略。",
+  },
+  ko: {
+    "nav.sigmaker": "시그니처 메이커", "sig.title": "시그니처 메이커", "sig.sub": "클라이언트 파일로 버전 간 시그니처 생성",
+    "sig.pick": "파일 선택", "sig.generate": "생성", "sig.json": "JSON", "sig.modeAob": "시그니처에서", "sig.modeRef": "주소에서",
+    "sig.aobPh": "48 8B ?? ?? ?? ?? (강화할 기존 AOB)", "sig.rvaPh": "0x… (참조의 RVA)",
+    "sig.empty": "클라이언트 파일과 대상을 선택한 후 생성하세요.", "sig.generating": "생성 중…", "sig.noFiles": "클라이언트 파일을 하나 이상 선택하세요.",
+    "sig.needAob": "강화할 시그니처를 입력하세요.", "sig.needRva": "참조 클라이언트를 선택하고 RVA를 입력하세요.", "sig.none": "안전한 시그니처를 찾지 못했습니다.",
+    "sig.unpacked": "비패킹", "sig.packed": "패킹됨", "sig.packedAlert": "선택한 바이너리 중 일부가 패킹된 것으로 보입니다. 생성된 시그니처가 신뢰할 수 없을 수 있습니다. 언패킹되거나 덤프된 이미지를 사용하세요.",
+    "sig.chosen": "선택됨", "sig.alternates": "대안", "sig.rejected": "거부됨", "sig.copy": "복사", "sig.save": "패턴으로 저장",
+    "sig.builds": "고유 빌드 {n}개", "sig.grade": "등급", "sig.bytesFixed": "{bytes} 바이트 · 고정 {fixed} · 와일드 {wild} · {ratio}",
+    "sig.colVersion": "버전", "sig.colMatch": "일치 RVA", "sig.colTarget": "해결된 대상",
+    "sig.refColumn": "참조", "sig.diagnostics": "진단", "sig.saved": "패턴 목록에 추가했습니다",
+    "sig.summary": "{arch} · 파일 {files}개 · 고유 빌드 {builds}개", "sig.dupBuilds": "중복 빌드",
+    "sig.gradeLegend": "등급 범례",
+    "sig.gradeA": "내용 검증된 앵커, 재배치 안전.", "sig.gradeB": "재배치 안전하지만 내용 미검증.",
+    "sig.gradeC": "약함: 절대 또는 미해결 참조, 또는 빌드 간 불일치.", "sig.gradeD": "입력이 패킹되거나 보호된 것으로 보임. 잠정적.",
+    "sig.gradeF": "거부됨: 고정 바이트 부족, 낮은 비율 또는 미지원 재배치.",
+    "sig.modeBoth": "둘 다", "sig.separate": "개별", "sig.cross": "교차 검증",
+    "sig.separateHint": "시그니처와 주소는 독립적인 대상입니다.",
+    "sig.crossHint": "각 시그니처는 같은 줄의 주소로 해결되어야 합니다.",
+    "sig.aobLabel": "시그니처 (한 줄에 하나)", "sig.refLabel": "참조 클라이언트", "sig.rvaLabel": "주소, RVA (한 줄에 하나)",
+    "sig.loadFile": "파일 불러오기", "sig.loadedLines": "{n}개 줄을 불러왔습니다", "sig.dismiss": "닫기", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.crossOk": "예상대로 {rva}로 해결되었습니다.", "sig.crossMismatch": "{got}로 해결되었습니다. 예상값은 {expected}입니다.",
+    "sig.crossNoMatch": "일치 없음", "sig.crossUneven": "시그니처 {sigs}개, 주소 {rvas}개. 남는 줄은 무시됩니다.",
+  },
+  he: {
+    "nav.sigmaker": "יוצר חתימות", "sig.title": "יוצר חתימות", "sig.sub": "יצירת חתימה חוצת גרסאות מקבצי לקוח",
+    "sig.pick": "בחר קבצים", "sig.generate": "צור", "sig.json": "JSON", "sig.modeAob": "מתוך חתימה", "sig.modeRef": "מתוך כתובת",
+    "sig.aobPh": "48 8B ?? ?? ?? ??  (AOB קיים לחיזוק)", "sig.rvaPh": "0x… (RVA בקובץ הייחוס)",
+    "sig.empty": "בחר קבצי לקוח ויעד, ולאחר מכן לחץ על צור.", "sig.generating": "יוצר…", "sig.noFiles": "בחר לפחות קובץ לקוח אחד.",
+    "sig.needAob": "הזן חתימה לחיזוק.", "sig.needRva": "בחר קובץ ייחוס והזן RVA.", "sig.none": "לא נמצאה חתימה בטוחה.",
+    "sig.unpacked": "לא ארוז", "sig.packed": "ארוז", "sig.packedAlert": "חלק מהקבצים שנבחרו נראים ארוזים. חתימות שנוצרות מהם עלולות להיות לא אמינות; השתמש בתמונה לא ארוזה.",
+    "sig.chosen": "נבחר", "sig.alternates": "חלופות", "sig.rejected": "נדחו", "sig.copy": "העתק", "sig.save": "שמור כתבנית",
+    "sig.builds": "{n} בנייות ייחודיות", "sig.grade": "ציון", "sig.bytesFixed": "{bytes} בייטים · {fixed} קבועים · {wild} כלליים · {ratio}",
+    "sig.colVersion": "גרסה", "sig.colMatch": "RVA תואם", "sig.colTarget": "יעד שנפתר",
+    "sig.refColumn": "ייחוס", "sig.diagnostics": "אבחון", "sig.saved": "נוסף לרשימת התבניות",
+    "sig.summary": "{arch} · {files} קבצים · {builds} בנייות ייחודיות", "sig.dupBuilds": "בנייות כפולות",
+    "sig.gradeLegend": "מקרא ציונים",
+    "sig.gradeA": "עוגן מאומת תוכן, בטוח למיקום מחדש.", "sig.gradeB": "בטוח למיקום מחדש, אך התוכן לא אומת.",
+    "sig.gradeC": "חלש: הפניה מוחלטת או לא פתורה, או חוסר עקביות בין בנייות.", "sig.gradeD": "אחד הקבצים נראה ארוז או מוגן; זמני.",
+    "sig.gradeF": "נדחה: מעט בייטים קבועים, יחס נמוך, או מיקום מחדש שאינו נתמך.",
+    "sig.modeBoth": "שניהם", "sig.separate": "בנפרד", "sig.cross": "אימות צולב",
+    "sig.separateHint": "החתימה והכתובת הן יעדים נפרדים.",
+    "sig.crossHint": "כל חתימה חייבת להתפענח לכתובת באותה שורה.",
+    "sig.aobLabel": "חתימות (אחת בכל שורה)", "sig.refLabel": "קובץ ייחוס", "sig.rvaLabel": "כתובות, RVA (אחת בכל שורה)",
+    "sig.loadFile": "טען קובץ", "sig.loadedLines": "נטענו {n} שורות", "sig.dismiss": "סגור", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.crossOk": "מתפענח אל {rva} כצפוי.", "sig.crossMismatch": "מתפענח אל {got}, צפוי {expected}.",
+    "sig.crossNoMatch": "אין התאמה", "sig.crossUneven": "{sigs} חתימות ו-{rvas} כתובות; שורות עודפות יתעלמו.",
+  },
+};
+Object.keys(SIG_I18N).forEach((lang) => Object.assign(I18N[lang], SIG_I18N[lang]));
+
+const ABOUT_I18N = {
+  en: {
+    "nav.about": "About", "about.title": "About", "about.sub": "Version, license, and project information",
+    "about.tagline": "Cross-version signature and offset toolkit for MapleStory clients.",
+    "about.desc": "MapleDumper finds, generates, and validates byte signatures and offsets that survive client patches. Feed it several client builds and it produces the highest-confidence pattern that resolves the same target in every version.",
+    "about.f1": "Cross-version Signature Maker with confidence grading.",
+    "about.f2": "Assembly scan, pattern editor, and version history comparison.",
+    "about.f3": "Privacy mask for safe screenshots and sharing.",
+    "about.licenseLabel": "License", "about.repoLabel": "Repository", "about.copyHint": "Click to copy",
+  },
+  ja: {
+    "nav.about": "情報", "about.title": "情報", "about.sub": "バージョン、ライセンス、プロジェクト情報",
+    "about.tagline": "MapleStory クライアント向けのバージョン横断シグネチャ/オフセットツールキット。",
+    "about.desc": "MapleDumper はクライアントのパッチを越えて有効なバイトシグネチャとオフセットを検出、生成、検証します。複数のクライアントビルドを与えると、すべてのバージョンで同じ対象を解決する最も信頼性の高いパターンを生成します。",
+    "about.f1": "信頼度評価付きのバージョン横断シグネチャメーカー。",
+    "about.f2": "アセンブリスキャン、パターンエディタ、バージョン履歴の比較。",
+    "about.f3": "安全なスクリーンショットと共有のためのプライバシーマスク。",
+    "about.licenseLabel": "ライセンス", "about.repoLabel": "リポジトリ", "about.copyHint": "クリックでコピー",
+  },
+  zh: {
+    "nav.about": "关于", "about.title": "关于", "about.sub": "版本、许可证和项目信息",
+    "about.tagline": "适用于 MapleStory 客户端的跨版本特征码与偏移工具包。",
+    "about.desc": "MapleDumper 可检测、生成并验证能在客户端更新后依然有效的字节特征码和偏移。提供多个客户端版本，它会生成在每个版本中都解析到相同目标的最高置信度模式。",
+    "about.f1": "带置信度评级的跨版本特征码生成器。",
+    "about.f2": "汇编扫描、模式编辑器和版本历史比较。",
+    "about.f3": "用于安全截图和分享的隐私遮罩。",
+    "about.licenseLabel": "许可证", "about.repoLabel": "仓库", "about.copyHint": "点击复制",
+  },
+  ko: {
+    "nav.about": "정보", "about.title": "정보", "about.sub": "버전, 라이선스 및 프로젝트 정보",
+    "about.tagline": "MapleStory 클라이언트를 위한 버전 간 시그니처 및 오프셋 도구 모음.",
+    "about.desc": "MapleDumper는 클라이언트 패치 후에도 유효한 바이트 시그니처와 오프셋을 찾고 생성하고 검증합니다. 여러 클라이언트 빌드를 제공하면 모든 버전에서 동일한 대상을 해결하는 가장 신뢰도 높은 패턴을 만듭니다.",
+    "about.f1": "신뢰도 등급이 포함된 버전 간 시그니처 메이커.",
+    "about.f2": "어셈블리 스캔, 패턴 편집기 및 버전 기록 비교.",
+    "about.f3": "안전한 스크린샷과 공유를 위한 개인정보 마스크.",
+    "about.licenseLabel": "라이선스", "about.repoLabel": "저장소", "about.copyHint": "클릭하여 복사",
+  },
+  he: {
+    "nav.about": "אודות", "about.title": "אודות", "about.sub": "מידע על גרסה, רישיון ופרויקט",
+    "about.tagline": "ערכת כלים לחתימות והיסטים חוצי גרסאות עבור לקוחות MapleStory.",
+    "about.desc": "MapleDumper מאתר, יוצר ומאמת חתימות בייטים והיסטים ששורדים עדכוני לקוח. הזן כמה גרסאות לקוח והוא יפיק את התבנית בעלת הביטחון הגבוה ביותר שמזהה את אותו יעד בכל גרסה.",
+    "about.f1": "יוצר חתימות חוצה גרסאות עם דירוג ביטחון.",
+    "about.f2": "סריקת אסמבלי, עורך תבניות והשוואת היסטוריית גרסאות.",
+    "about.f3": "מסכת פרטיות לצילומי מסך ושיתוף בטוחים.",
+    "about.licenseLabel": "רישיון", "about.repoLabel": "מאגר", "about.copyHint": "לחץ להעתקה",
+  },
+};
+Object.keys(ABOUT_I18N).forEach((lang) => Object.assign(I18N[lang], ABOUT_I18N[lang]));
+
+const SIG_STAGE_I18N = {
+  en: {
+    "sig.stLoad": "Loading {label}…", "sig.stPack": "Checking for packers…",
+    "sig.stDedup": "Grouping builds…", "sig.stRead": "Reading code ({index}/{total})…",
+    "sig.stLocate": "Locating the target…", "sig.stDirect": "Scanning the direct match…",
+    "sig.stBranch": "Scanning call and jmp sites…", "sig.stPtr": "Scanning pointer references…",
+    "sig.stScore": "Scoring candidates…",
+  },
+  ja: {
+    "sig.stLoad": "{label} を読み込み中…", "sig.stPack": "パッカーを確認中…",
+    "sig.stDedup": "ビルドをグループ化中…", "sig.stRead": "コードを読み込み中（{index}/{total}）…",
+    "sig.stLocate": "対象を特定中…", "sig.stDirect": "直接一致をスキャン中…",
+    "sig.stBranch": "call/jmp サイトをスキャン中…", "sig.stPtr": "ポインター参照をスキャン中…",
+    "sig.stScore": "候補を評価中…",
+  },
+  zh: {
+    "sig.stLoad": "正在加载 {label}…", "sig.stPack": "正在检查加壳…",
+    "sig.stDedup": "正在分组版本…", "sig.stRead": "正在读取代码（{index}/{total}）…",
+    "sig.stLocate": "正在定位目标…", "sig.stDirect": "正在扫描直接匹配…",
+    "sig.stBranch": "正在扫描 call/jmp 位置…", "sig.stPtr": "正在扫描指针引用…",
+    "sig.stScore": "正在评估候选…",
+  },
+  ko: {
+    "sig.stLoad": "{label} 불러오는 중…", "sig.stPack": "패킹 여부 확인 중…",
+    "sig.stDedup": "빌드 그룹화 중…", "sig.stRead": "코드 읽는 중 ({index}/{total})…",
+    "sig.stLocate": "대상 찾는 중…", "sig.stDirect": "직접 일치 스캔 중…",
+    "sig.stBranch": "call/jmp 위치 스캔 중…", "sig.stPtr": "포인터 참조 스캔 중…",
+    "sig.stScore": "후보 평가 중…",
+  },
+  he: {
+    "sig.stLoad": "טוען את {label}…", "sig.stPack": "בודק אריזה…",
+    "sig.stDedup": "מקבץ בנייות…", "sig.stRead": "קורא קוד ({index}/{total})…",
+    "sig.stLocate": "מאתר את היעד…", "sig.stDirect": "סורק התאמה ישירה…",
+    "sig.stBranch": "סורק אתרי call/jmp…", "sig.stPtr": "סורק הפניות מצביע…",
+    "sig.stScore": "מדרג מועמדים…",
+  },
+};
+Object.keys(SIG_STAGE_I18N).forEach((lang) => Object.assign(I18N[lang], SIG_STAGE_I18N[lang]));
+
+const CTX_I18N = {
+  en: {
+    "ctx.copyName": "Copy name", "ctx.copyType": "Copy type", "ctx.copyCategory": "Copy category",
+    "ctx.copySignature": "Copy signature", "ctx.copyNote": "Copy note",
+    "ctx.copyJson": "Copy as JSON", "ctx.copyText": "Copy as text",
+    "ctx.copyAllJson": "Copy all as JSON", "ctx.copyAllText": "Copy all as text",
+  },
+  ja: {
+    "ctx.copyName": "名前をコピー", "ctx.copyType": "種類をコピー", "ctx.copyCategory": "カテゴリをコピー",
+    "ctx.copySignature": "シグネチャをコピー", "ctx.copyNote": "メモをコピー",
+    "ctx.copyJson": "JSON としてコピー", "ctx.copyText": "テキストとしてコピー",
+    "ctx.copyAllJson": "すべてを JSON でコピー", "ctx.copyAllText": "すべてをテキストでコピー",
+  },
+  zh: {
+    "ctx.copyName": "复制名称", "ctx.copyType": "复制类型", "ctx.copyCategory": "复制类别",
+    "ctx.copySignature": "复制特征码", "ctx.copyNote": "复制备注",
+    "ctx.copyJson": "复制为 JSON", "ctx.copyText": "复制为文本",
+    "ctx.copyAllJson": "全部复制为 JSON", "ctx.copyAllText": "全部复制为文本",
+  },
+  ko: {
+    "ctx.copyName": "이름 복사", "ctx.copyType": "유형 복사", "ctx.copyCategory": "카테고리 복사",
+    "ctx.copySignature": "시그니처 복사", "ctx.copyNote": "메모 복사",
+    "ctx.copyJson": "JSON으로 복사", "ctx.copyText": "텍스트로 복사",
+    "ctx.copyAllJson": "전체를 JSON으로 복사", "ctx.copyAllText": "전체를 텍스트로 복사",
+  },
+  he: {
+    "ctx.copyName": "העתק שם", "ctx.copyType": "העתק סוג", "ctx.copyCategory": "העתק קטגוריה",
+    "ctx.copySignature": "העתק חתימה", "ctx.copyNote": "העתק הערה",
+    "ctx.copyJson": "העתק כ-JSON", "ctx.copyText": "העתק כטקסט",
+    "ctx.copyAllJson": "העתק הכול כ-JSON", "ctx.copyAllText": "העתק הכול כטקסט",
+  },
+};
+Object.keys(CTX_I18N).forEach((lang) => Object.assign(I18N[lang], CTX_I18N[lang]));
+
+const SIG_STAGE_KEY = {
+  load: "sig.stLoad", pack: "sig.stPack", dedup: "sig.stDedup", read: "sig.stRead",
+  locate: "sig.stLocate", direct: "sig.stDirect", branch: "sig.stBranch", ptr: "sig.stPtr",
+  score: "sig.stScore",
+};
 
 function t(key, params) {
   const table = I18N[LANG] || I18N.en;
@@ -522,6 +774,7 @@ const ICONS = {
   globe: SVG('<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>'),
   diff: SVG('<line x1="12" y1="4" x2="12" y2="20"/><polyline points="7 9 4 12 7 15"/><polyline points="17 9 20 12 17 15"/>'),
   history: SVG('<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>'),
+  info: SVG('<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'),
 };
 
 function injectIcons(root = document) {
@@ -613,8 +866,58 @@ function toast(message, isError) {
   toast._t = setTimeout(() => (el.hidden = true), 2600);
 }
 
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text == null ? "" : String(text));
+    toast(t("toast.copied"));
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+
+function hideCtxMenu() {
+  const m = $("ctx-menu");
+  if (m) m.hidden = true;
+}
+
+function showCtxMenu(x, y, items) {
+  const m = $("ctx-menu");
+  if (!m) return;
+  m.innerHTML = items
+    .map((it) => (it.sep ? `<div class="ctx-sep"></div>` : `<button type="button">${esc(it.label)}</button>`))
+    .join("");
+  let bi = 0;
+  const btns = m.querySelectorAll("button");
+  items.forEach((it) => {
+    if (it.sep) return;
+    const b = btns[bi++];
+    b.addEventListener("click", () => {
+      hideCtxMenu();
+      it.action();
+    });
+  });
+  m.hidden = false;
+  const mw = m.offsetWidth;
+  const mh = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(x, window.innerWidth - mw - 8)) + "px";
+  m.style.top = Math.max(8, Math.min(y, window.innerHeight - mh - 8)) + "px";
+}
+
+document.addEventListener("click", (e) => {
+  if (!(e.target.closest && e.target.closest("#ctx-menu"))) hideCtxMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.key || "") === "Escape") hideCtxMenu();
+});
+document.addEventListener("scroll", hideCtxMenu, true);
+window.addEventListener("blur", hideCtxMenu);
+
 function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+// For values placed inside double-quoted HTML attributes (paths, AOBs, titles): also escape quotes.
+function escAttr(s) {
+  return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function hueOf(str) {
@@ -642,6 +945,7 @@ function showView(name) {
   if (name === "editor") ensureEditor();
   if (name === "history") loadHistory();
   if (name === "asmscan") asmSyncTarget();
+  if (name === "sigmaker") renderSigFiles();
 }
 document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
 $("open-editor").addEventListener("click", () => showView("editor"));
@@ -1003,6 +1307,392 @@ $("asm-search").addEventListener("input", () => {
   if (asmState.report) renderAsmResults(asmState.report);
 });
 
+const sigState = { files: [], response: null, mode: "aob", cross: "separate", showJson: false, alertDismissed: false };
+
+function renderSigFiles() {
+  const host = $("sig-files");
+  if (!host) return;
+  if (!sigState.files.length) {
+    host.innerHTML = `<span class="muted">${esc(t("sig.noFiles"))}</span>`;
+  } else {
+    host.innerHTML = sigState.files
+      .map((f) => {
+        const tip = escAttr(
+          `entropy ${(f.max_entropy || 0).toFixed(2)}${f.reasons.length ? " · " + f.reasons.join("; ") : ""}`,
+        );
+        const badge = f.packed
+          ? `<span class="sig-badge packed" title="${tip}">${t("sig.packed")}</span>`
+          : `<span class="sig-badge ok" title="${tip}">${t("sig.unpacked")}</span>`;
+        return `<span class="sig-chip"><span class="d-name">${esc(f.name)}</span><span class="muted">${esc(f.arch)}</span>${badge}<button class="sig-chip-x" data-rm="${escAttr(f.path)}" title="remove">✕</button></span>`;
+      })
+      .join("");
+    host.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => sigRemoveFile(b.dataset.rm)));
+  }
+  const sel = $("sig-ref");
+  if (sel) sel.innerHTML = sigState.files.map((f) => `<option value="${escAttr(f.path)}">${esc(f.name)}</option>`).join("");
+  const anyPacked = sigState.files.some((f) => f.packed);
+  const alert = $("sig-alert");
+  if (anyPacked && !sigState.alertDismissed) {
+    alert.hidden = false;
+    alert.innerHTML = `<span>⚠ ${esc(t("sig.packedAlert"))}</span><button class="sig-alert-x" title="${escAttr(t("sig.dismiss"))}">✕</button>`;
+    const x = alert.querySelector(".sig-alert-x");
+    if (x)
+      x.addEventListener("click", () => {
+        sigState.alertDismissed = true;
+        alert.hidden = true;
+      });
+  } else {
+    alert.hidden = true;
+  }
+}
+
+async function sigPickFiles() {
+  let paths;
+  try {
+    paths = await invoke("pick_open_files");
+  } catch {
+    return;
+  }
+  for (const p of paths) {
+    if (sigState.files.some((f) => f.path === p)) continue;
+    try {
+      const info = await invoke("inspect_pe", { path: p });
+      sigState.files.push({
+        path: p,
+        name: info.name,
+        arch: info.arch,
+        packed: info.packed,
+        reasons: info.reasons,
+        max_entropy: info.max_entropy,
+      });
+    } catch (e) {
+      toast(String(e), true);
+    }
+  }
+  sigState.alertDismissed = false;
+  renderSigFiles();
+  sigUpdateValidity();
+}
+
+function sigRemoveFile(path) {
+  sigState.files = sigState.files.filter((f) => f.path !== path);
+  sigState.alertDismissed = false;
+  renderSigFiles();
+  sigUpdateValidity();
+}
+
+function sigSetMode(mode) {
+  sigState.mode = mode;
+  $("sig-mode-tabs")
+    .querySelectorAll(".tab")
+    .forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+  $("sig-aob-row").hidden = !(mode === "aob" || mode === "both");
+  $("sig-ref-row").hidden = !(mode === "ref" || mode === "both");
+  $("sig-both-opts").hidden = mode !== "both";
+  sigUpdateValidity();
+}
+
+function sigSetCross(mode) {
+  sigState.cross = mode;
+  $("sig-cross-toggle")
+    .querySelectorAll(".seg-btn")
+    .forEach((b) => b.classList.toggle("active", b.dataset.cross === mode));
+  const hint = $("sig-cross-hint");
+  const key = mode === "cross" ? "sig.crossHint" : "sig.separateHint";
+  hint.setAttribute("data-i18n", key);
+  hint.textContent = t(key);
+  sigUpdateValidity();
+}
+
+function sigLines(id) {
+  return $(id)
+    .value.split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const SIG_RVA_RE = /^(0x)?[0-9a-fA-F]+$/;
+function sigRvaValidity() {
+  const lines = sigLines("sig-rva");
+  const bad = lines.length > 0 && lines.some((l) => !SIG_RVA_RE.test(l));
+  $("sig-rva").classList.toggle("invalid", bad);
+  return lines.length > 0 && !bad;
+}
+
+function sigUpdateValidity() {
+  const m = sigState.mode;
+  const hasFiles = sigState.files.length > 0;
+  const aobOk = sigLines("sig-aob").length > 0;
+  const rvaOk = sigRvaValidity();
+  let ok = hasFiles;
+  if (m === "aob") ok = ok && aobOk;
+  else if (m === "ref") ok = ok && rvaOk;
+  else if (sigState.cross === "cross") ok = ok && aobOk && rvaOk;
+  else ok = ok && (aobOk || rvaOk);
+  $("sig-gen").disabled = !ok;
+}
+
+function buildSigJobs() {
+  const m = sigState.mode;
+  const refPath = $("sig-ref").value;
+  const aobs = sigLines("sig-aob");
+  const rvas = sigLines("sig-rva");
+  const jobs = [];
+  if (m === "aob") {
+    for (const sig of aobs) jobs.push({ type: "aob", sig });
+  } else if (m === "ref") {
+    for (const rva of rvas) jobs.push({ type: "ref", ref_path: refPath, rva });
+  } else if (sigState.cross === "cross") {
+    const n = Math.min(aobs.length, rvas.length);
+    for (let i = 0; i < n; i++) jobs.push({ type: "cross", sig: aobs[i], ref_path: refPath, rva: rvas[i] });
+  } else {
+    for (const sig of aobs) jobs.push({ type: "aob", sig });
+    for (const rva of rvas) jobs.push({ type: "ref", ref_path: refPath, rva });
+  }
+  return jobs;
+}
+
+let sigLoadTarget = null;
+function sigLoadFile(targetId) {
+  sigLoadTarget = targetId;
+  $("sig-file-input").click();
+}
+
+function sigPhaseText(p) {
+  const key = p && SIG_STAGE_KEY[p.phase];
+  const base = key ? t(key, { label: p.label || "", index: p.index || 0, total: p.total || 0 }) : t("sig.generating");
+  if (p && p.jobs > 1 && p.job > 0) return t("sig.jobProgress", { job: p.job, jobs: p.jobs }) + " " + base;
+  return base;
+}
+
+async function runSigGen() {
+  if (!sigState.files.length) {
+    toast(t("sig.noFiles"), true);
+    return;
+  }
+  const jobs = buildSigJobs();
+  if (!jobs.length) {
+    toast(sigState.mode === "ref" ? t("sig.needRva") : t("sig.needAob"), true);
+    return;
+  }
+  if (sigState.mode === "both" && sigState.cross === "cross") {
+    const a = sigLines("sig-aob").length;
+    const r = sigLines("sig-rva").length;
+    if (a !== r) toast(t("sig.crossUneven", { sigs: a, rvas: r }));
+  }
+  const req = { clients: sigState.files.map((f) => f.path), jobs };
+  $("sig-gen").disabled = true;
+  const setStatus = (msg) => {
+    $("sig-results").innerHTML = `<div class="insp-hint">${esc(msg)}</div>`;
+  };
+  setStatus(t("sig.generating"));
+  let unlisten = null;
+  const ev = (window.__TAURI__ || {}).event;
+  if (ev && ev.listen) {
+    try {
+      unlisten = await ev.listen("sig-progress", (e) => setStatus(sigPhaseText(e.payload)));
+    } catch (_) {
+      unlisten = null;
+    }
+  }
+  try {
+    sigState.response = await invoke("generate_signature", { req });
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
+    sigState.showJson = false;
+    $("sig-json").hidden = false;
+    renderSigResults();
+  } catch (e) {
+    sigState.response = null;
+    $("sig-json").hidden = true;
+    setStatus(String(e));
+    toast(String(e), true);
+  } finally {
+    if (unlisten) unlisten();
+    sigUpdateValidity();
+  }
+}
+
+function gradeDesc(letter) {
+  return t("sig.grade" + String(letter).toUpperCase());
+}
+
+function sigCandCard(c, tag, primary) {
+  const grade = c.grade.toLowerCase();
+  const rows = c.per_version
+    .map(
+      (p) =>
+        `<tr><td class="d-name">${esc(p.label)}</td><td class="mono d-addr">${esc(p.match_rva || "-")}</td><td class="mono d-addr">${esc(p.resolved_target_rva || "-")}</td><td>${esc(p.target_type || "-")}</td></tr>`,
+    )
+    .join("");
+  const diags = c.diags.length
+    ? `<ul class="sig-diags">${c.diags.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>`
+    : "";
+  return `<div class="sig-cand${primary ? " primary" : ""}">
+    <div class="sig-cand-head">
+      <span class="sig-grade g-${grade}" title="${escAttr(gradeDesc(c.grade))}">${esc(c.grade)}</span>
+      ${tag ? `<span class="sig-tag">${esc(tag)}</span>` : ""}
+      <span class="sig-aob mono d-sig">${esc(c.aob)}${esc(c.suffix)}</span>
+      <span class="sig-actions">
+        <button class="icon-btn sig-copy" data-aob="${escAttr(c.aob)}">${esc(t("sig.copy"))}</button>
+        <button class="icon-btn sig-save" data-aob="${escAttr(c.aob)}" data-suffix="${escAttr(c.suffix)}">${esc(t("sig.save"))}</button>
+      </span>
+    </div>
+    <div class="sig-stats muted">${t("sig.bytesFixed", { bytes: c.bytes, fixed: c.fixed, wild: c.wildcards, ratio: c.fixed_ratio.toFixed(2) })}${c.reloc_safe ? "" : " · ⚠ reloc"}</div>
+    <table class="grid-table sig-pv"><thead><tr><th>${esc(t("sig.colVersion"))}</th><th>${esc(t("sig.colMatch"))}</th><th>${esc(t("sig.colTarget"))}</th><th>${esc(t("col.type"))}</th></tr></thead><tbody>${rows}</tbody></table>
+    ${diags}
+  </div>`;
+}
+
+function reportInnerHtml(r) {
+  const anyPacked = r.inputs.some((i) => i.packed);
+  let html = `<div class="sig-summary">${esc(t("sig.summary", { arch: r.arch, files: r.inputs.length, builds: r.unique_builds }))}${anyPacked ? ` · ⚠ ${esc(t("sig.packed"))}` : ""}</div>`;
+  const dups = r.duplicate_groups.filter((g) => g[1].length > 1);
+  if (dups.length) {
+    html += `<div class="sig-section-h">${t("sig.dupBuilds")}</div>`;
+    html += dups
+      .map(
+        (g) =>
+          `<div class="sig-dup"><span class="sig-dup-hash mono">${esc(g[0])}</span><span class="muted">${esc(g[1].join(", "))}</span></div>`,
+      )
+      .join("");
+  }
+  html += r.chosen ? sigCandCard(r.chosen, t("sig.chosen"), true) : `<div class="insp-hint">${t("sig.none")}</div>`;
+  if (r.alternates.length) {
+    html += `<div class="sig-section-h">${t("sig.alternates")}</div>` + r.alternates.map((c) => sigCandCard(c, "", false)).join("");
+  }
+  if (r.rejected.length) {
+    html += `<div class="sig-section-h">${t("sig.rejected")}</div>` + r.rejected.map((c) => sigCandCard(c, "", false)).join("");
+  }
+  if (r.diagnostics.length) {
+    html += `<div class="sig-section-h">${t("sig.diagnostics")}</div><ul class="sig-diags">` + r.diagnostics.map((d) => `<li>${esc(d)}</li>`).join("") + "</ul>";
+  }
+  return html;
+}
+
+function gradeLegendHtml() {
+  return (
+    `<div class="sig-section-h">${t("sig.gradeLegend")}</div><ul class="sig-legend">` +
+    ["A", "B", "C", "D", "F"].map((g) => `<li><span class="sig-grade g-${g.toLowerCase()}">${g}</span><span>${esc(gradeDesc(g))}</span></li>`).join("") +
+    "</ul>"
+  );
+}
+
+function crossVerdictHtml(c) {
+  if (c.agrees) {
+    return `<div class="sig-cross-verdict ok">✓ ${esc(t("sig.crossOk", { rva: c.expected_rva }))}</div>`;
+  }
+  return `<div class="sig-cross-verdict bad">✗ ${esc(t("sig.crossMismatch", { got: c.matched_rva || t("sig.crossNoMatch"), expected: c.expected_rva }))}</div>`;
+}
+
+function wireSigButtons(host) {
+  host.querySelectorAll(".sig-copy").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(b.dataset.aob);
+      toast(t("toast.copied"));
+    }),
+  );
+  host.querySelectorAll(".sig-save").forEach((b) => b.addEventListener("click", () => sigSaveAsPattern(b.dataset.aob, b.dataset.suffix)));
+}
+
+function renderSigResults() {
+  const host = $("sig-results");
+  const resp = sigState.response;
+  if (!resp) return;
+  if (sigState.showJson) {
+    host.innerHTML = `<pre class="sig-jsonview mono">${esc(JSON.stringify(resp, null, 2))}</pre>`;
+    return;
+  }
+  const jobs = resp.jobs || [];
+  if (!jobs.length) {
+    host.innerHTML = `<div class="insp-hint">${t("sig.none")}</div>`;
+    return;
+  }
+  const multi = jobs.length > 1;
+  let html = "";
+  jobs.forEach((job, i) => {
+    const framed = multi || !!job.cross;
+    html += `<div class="sig-job${framed ? " framed" : ""}">`;
+    if (framed) {
+      const chosen = job.report && job.report.chosen;
+      const gradeChip = chosen ? `<span class="sig-grade g-${chosen.grade.toLowerCase()}" title="${escAttr(gradeDesc(chosen.grade))}">${esc(chosen.grade)}</span>` : "";
+      html += `<div class="sig-job-head">${multi ? `<span class="sig-job-n">#${i + 1}</span>` : ""}<span class="sig-job-label mono">${esc(job.label)}</span>${gradeChip}</div>`;
+    }
+    if (job.error) {
+      html += `<div class="sig-job-err">${esc(job.error)}</div>`;
+    } else {
+      if (job.cross) html += crossVerdictHtml(job.cross);
+      if (job.report) html += reportInnerHtml(job.report);
+    }
+    html += `</div>`;
+  });
+  html += gradeLegendHtml();
+  host.innerHTML = html;
+  wireSigButtons(host);
+}
+
+function sigSaveAsPattern(aob, suffix) {
+  // The resolver keys off the pattern-name suffix (_PTR/_CALL/_OFF/_HDR). Kind::Call follows both
+  // call and jmp rel32, so a _JMP anchor is saved as _CALL so the scanner resolves it to its target.
+  const nameSuffix = suffix === "_JMP" ? "_CALL" : suffix;
+  openModal(-1);
+  $("f-aob").value = aob;
+  $("f-name").value = "NewSig" + nameSuffix;
+  $("f-name").focus();
+}
+
+$("sig-pick").addEventListener("click", sigPickFiles);
+$("sig-gen").addEventListener("click", runSigGen);
+$("sig-json").addEventListener("click", () => {
+  sigState.showJson = !sigState.showJson;
+  renderSigResults();
+});
+$("sig-mode-tabs")
+  .querySelectorAll(".tab")
+  .forEach((b) => b.addEventListener("click", () => sigSetMode(b.dataset.mode)));
+$("sig-cross-toggle")
+  .querySelectorAll(".seg-btn")
+  .forEach((b) => b.addEventListener("click", () => sigSetCross(b.dataset.cross)));
+["sig-aob", "sig-rva"].forEach((id) => {
+  const ta = $(id);
+  ta.addEventListener("input", sigUpdateValidity);
+  ta.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      if (!$("sig-gen").disabled) runSigGen();
+    }
+  });
+});
+document.querySelectorAll(".sig-load").forEach((b) => b.addEventListener("click", () => sigLoadFile(b.dataset.target)));
+$("sig-file-input").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file || !sigLoadTarget) {
+    e.target.value = "";
+    return;
+  }
+  const target = sigLoadTarget;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const ta = $(target);
+    const incoming = String(reader.result || "")
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const existing = ta.value
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    ta.value = existing.concat(incoming).join("\n");
+    sigUpdateValidity();
+    toast(t("sig.loadedLines", { n: incoming.length }));
+  };
+  reader.readAsText(file);
+  e.target.value = "";
+});
+sigUpdateValidity();
+
 function buildTabs() {
   const cats = [...new Set(state.rows.map((r) => r.category))].sort();
   const host = $("w-tabs");
@@ -1022,7 +1712,7 @@ function buildTabs() {
 
 function accentClass(row) {
   if (row.status !== "found") return "dot-muted";
-  return row.kind === "call" || row.kind === "header" ? "dot-violet" : "dot-blue";
+  return row.type === "call" || row.type === "header" ? "dot-violet" : "dot-blue";
 }
 
 function typeKey(kind) {
@@ -1075,7 +1765,7 @@ function renderResults() {
         <td>${value}</td>
         <td><span class="sig d-sig" title="${esc(r.pattern)}">${esc(r.pattern)}</span></td>
         <td>${statusBadge(r.status)}</td>
-        <td><span class="tag">${esc(typeLabel(r.kind))}</span></td>
+        <td><span class="tag">${esc(typeLabel(r.type))}</span></td>
         <td><div class="hits"><div class="bar"><span style="width:${pct}%"></span></div><span class="num">${r.matches}</span></div></td>
       </tr>`;
     })
@@ -1108,7 +1798,7 @@ function selectRow(name) {
   const sb = $("insp-status");
   sb.className = `badge ${statusClass(row.status)}`;
   sb.textContent = statusText(row.status);
-  $("insp-desc").textContent = `${typeLabel(row.kind)} · ${row.category}`;
+  $("insp-desc").textContent = `${typeLabel(row.type)} · ${row.category}`;
   $("insp-hint").hidden = true;
   $("insp-body").hidden = false;
 
@@ -1116,7 +1806,7 @@ function selectRow(name) {
   $("insp-rva").textContent = row.value || "";
   $("insp-abs").textContent = abs || (row.is_offset ? t("insp.displacement") : "");
   $("insp-aob").textContent = row.pattern;
-  $("insp-type").textContent = typeLabel(row.kind);
+  $("insp-type").textContent = typeLabel(row.type);
   $("insp-cat").textContent = row.category;
   $("insp-mod").textContent = state.report ? state.report.module_name : "";
 
@@ -1198,6 +1888,46 @@ function refreshPatterns() {
   reparse().then(renderPatterns);
 }
 
+function patternMatches(p, term, cat) {
+  if (cat !== "all" && p.category !== cat) return false;
+  if (!term) return true;
+  return (
+    p.name.toLowerCase().includes(term) ||
+    p.aob.toLowerCase().includes(term) ||
+    (p.note || "").toLowerCase().includes(term)
+  );
+}
+
+function filteredPatterns() {
+  const term = $("pattern-search").value.trim().toLowerCase();
+  const cat = $("pattern-cat").value || "all";
+  return state.patterns.filter((p) => patternMatches(p, term, cat));
+}
+
+function patternRecord(p) {
+  return { name: p.name, type: typeLabel(p.type), category: p.category, signature: p.aob, note: p.note || "" };
+}
+
+function patternLine(p) {
+  return `${p.name} = ${p.aob}${p.note ? ` ; ${p.note}` : ""}`;
+}
+
+function patternCtxItems(p) {
+  return [
+    { label: t("ctx.copyName"), action: () => copyText(p.name) },
+    { label: t("ctx.copyType"), action: () => copyText(typeLabel(p.type)) },
+    { label: t("ctx.copyCategory"), action: () => copyText(p.category) },
+    { label: t("ctx.copySignature"), action: () => copyText(p.aob) },
+    { label: t("ctx.copyNote"), action: () => copyText(p.note || "") },
+    { sep: true },
+    { label: t("ctx.copyJson"), action: () => copyText(JSON.stringify(patternRecord(p), null, 2)) },
+    { label: t("ctx.copyText"), action: () => copyText(patternLine(p)) },
+    { sep: true },
+    { label: t("ctx.copyAllJson"), action: () => copyText(JSON.stringify(filteredPatterns().map(patternRecord), null, 2)) },
+    { label: t("ctx.copyAllText"), action: () => copyText(filteredPatterns().map(patternLine).join("\n")) },
+  ];
+}
+
 function renderPatterns() {
   const n = state.patterns.length;
   $("pattern-count").textContent = t(n === 1 ? "pat.countOne" : "pat.count", { n });
@@ -1212,13 +1942,7 @@ function renderPatterns() {
   const term = $("pattern-search").value.trim().toLowerCase();
   const cat = sel.value;
   const body = $("pattern-body");
-  const rows = state.patterns
-    .map((p, i) => ({ p, i }))
-    .filter(({ p }) => {
-      if (cat !== "all" && p.category !== cat) return false;
-      if (!term) return true;
-      return p.name.toLowerCase().includes(term) || p.aob.toLowerCase().includes(term) || (p.note || "").toLowerCase().includes(term);
-    });
+  const rows = state.patterns.map((p, i) => ({ p, i })).filter(({ p }) => patternMatches(p, term, cat));
 
   if (rows.length === 0) {
     body.innerHTML = `<tr class="empty"><td colspan="6">${esc(t("pat.empty"))}</td></tr>`;
@@ -1227,11 +1951,11 @@ function renderPatterns() {
 
   body.innerHTML = rows
     .map(
-      ({ p, i }) => `<tr>
+      ({ p, i }) => `<tr data-pi="${i}">
       <td class="mono d-name">${esc(p.name)}</td>
-      <td><span class="tag">${esc(typeLabel(p.kind))}</span></td>
+      <td><span class="tag">${esc(typeLabel(p.type))}</span></td>
       <td class="d-cat">${esc(p.category)}</td>
-      <td><span class="sig d-sig" title="${esc(p.aob)}">${esc(p.aob)}</span></td>
+      <td><span class="sig d-sig copyable" title="${escAttr(p.aob)}" data-aob="${escAttr(p.aob)}">${esc(p.aob)}</span></td>
       <td class="note-cell d-note">${esc(p.note || "")}</td>
       <td><div class="row-actions">
         <button class="icon-btn" data-edit="${i}">${esc(t("pat.edit"))}</button>
@@ -1241,6 +1965,14 @@ function renderPatterns() {
     .join("");
   body.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => openModal(Number(b.dataset.edit))));
   body.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => deletePattern(Number(b.dataset.del))));
+  body.querySelectorAll(".sig.copyable").forEach((el) => el.addEventListener("click", () => copyText(el.dataset.aob)));
+  body.querySelectorAll("tr[data-pi]").forEach((tr) =>
+    tr.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      const p = state.patterns[Number(tr.dataset.pi)];
+      if (p) showCtxMenu(e.clientX, e.clientY, patternCtxItems(p));
+    })
+  );
 }
 
 function regenerate(patterns) {
@@ -1652,7 +2384,7 @@ async function toggleSymDetail(tr) {
     if (tr.dataset.kind === "diff") {
       const oldAsm = await asmFor(tr.dataset.oldBytes, bits, tr.dataset.old);
       const newAsm = await asmFor(tr.dataset.newBytes, bits, tr.dataset.new);
-      body.innerHTML = `<div class="sym-cols"><div class="sym-col"><div class="sym-h">${t("diff.colOld")} <span class="mono">${esc(tr.dataset.old || "—")}</span></div>${oldAsm}</div><div class="sym-col"><div class="sym-h">${t("diff.colNew")} <span class="mono">${esc(tr.dataset.new || "—")}</span></div>${newAsm}</div></div>`;
+      body.innerHTML = `<div class="sym-cols"><div class="sym-col"><div class="sym-h">${t("diff.colOld")} <span class="mono">${esc(tr.dataset.old || "-")}</span></div>${oldAsm}</div><div class="sym-col"><div class="sym-h">${t("diff.colNew")} <span class="mono">${esc(tr.dataset.new || "-")}</span></div>${newAsm}</div></div>`;
     } else {
       body.innerHTML = await asmFor(tr.dataset.bytes, bits, tr.dataset.addr);
     }
@@ -1689,7 +2421,7 @@ async function scanTabHtml(tab) {
   const rows = findings
     .map(
       (f) =>
-        `<tr class="sym-row" data-kind="scan" data-bits="${bits}" data-addr="${esc(f.value || "")}" data-bytes="${esc(f.bytes || "")}"><td class="d-name">${esc(f.name)}</td><td class="mono d-addr">${f.value ? esc(f.value) : "—"}</td><td>${catChip(f.category)}</td><td>${statusBadge(f.status)}</td></tr>`,
+        `<tr class="sym-row" data-kind="scan" data-bits="${bits}" data-addr="${esc(f.value || "")}" data-bytes="${esc(f.bytes || "")}"><td class="d-name">${esc(f.name)}</td><td class="mono d-addr">${f.value ? esc(f.value) : "-"}</td><td>${catChip(f.category)}</td><td>${statusBadge(f.status)}</td></tr>`,
     )
     .join("");
   return `<div class="hist-banner" style="--vh:${hue}"><span class="hist-banner-ver">${ver}</span><span class="hist-banner-hash">${g ? esc(g.build_hash) : ""}</span><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /><button id="hist-exp" class="btn btn-soft">${t("out.copy")}</button></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("col.address")}</th><th>${t("col.category")}</th><th>${t("col.status")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -1707,7 +2439,7 @@ async function diffTabHtml(tab) {
     ? view.rows
         .map(
           (r) =>
-            `<tr class="sym-row" data-kind="diff" data-bits="${bits}" data-old="${esc(r.old || "")}" data-new="${esc(r.new || "")}" data-old-bytes="${esc(r.old_bytes || "")}" data-new-bytes="${esc(r.new_bytes || "")}"><td class="d-name">${esc(r.name)}</td><td><span class="diff-tag ${cls[r.state]}">${label[r.state]}</span></td><td class="mono d-addr">${esc(r.old || "—")}</td><td class="mono d-addr">${esc(r.new || "—")}</td><td class="d-cat">${esc(r.category)}</td></tr>`,
+            `<tr class="sym-row" data-kind="diff" data-bits="${bits}" data-old="${esc(r.old || "")}" data-new="${esc(r.new || "")}" data-old-bytes="${esc(r.old_bytes || "")}" data-new-bytes="${esc(r.new_bytes || "")}"><td class="d-name">${esc(r.name)}</td><td><span class="diff-tag ${cls[r.state]}">${label[r.state]}</span></td><td class="mono d-addr">${esc(r.old || "-")}</td><td class="mono d-addr">${esc(r.new || "-")}</td><td class="d-cat">${esc(r.category)}</td></tr>`,
         )
         .join("")
     : `<tr class="empty"><td colspan="5">${t("diff.noChanges")}</td></tr>`;
@@ -1723,7 +2455,7 @@ async function matrixTabHtml(tab) {
         .map((v) => {
           const changed = v != null && prev != null && v !== prev;
           if (v != null) prev = v;
-          return `<td class="mono d-addr${changed ? " mx-changed" : ""}">${v ? esc(v) : "—"}</td>`;
+          return `<td class="mono d-addr${changed ? " mx-changed" : ""}">${v ? esc(v) : "-"}</td>`;
         })
         .join("");
       return `<tr><td class="d-name mx-name">${esc(r.name)}</td><td>${catChip(r.category)}</td>${cells}</tr>`;
@@ -1808,6 +2540,8 @@ function relocalize() {
   $("target-label").textContent = state.byClass ? t("ws.windowClass") : t("ws.targetProcess");
   $("w-target").placeholder = state.byClass ? t("ws.windowClassPh") : "MapleStory.exe";
   $("engine-badge").textContent = state.engineVer ? `${t("engine.label")} ${state.engineVer}` : t("engine.offline");
+  const av = $("about-version");
+  if (av) av.textContent = state.engineVer || "";
   $("w-source").value = state.sourceFile || t("ws.builtinSamples");
   setConn(state.connKey, state.connCls);
   setFoot(state.foot.titleKey, state.foot.subKey, state.foot.params, state.foot.rawSub);
@@ -1818,6 +2552,8 @@ function relocalize() {
   renderPatterns();
   asmSyncTarget();
   if (asmState.report) renderAsmResults(asmState.report);
+  renderSigFiles();
+  if (sigState.response) renderSigResults();
   if (histState.groups.length) {
     renderHistory();
     renderTabs();
@@ -1851,6 +2587,10 @@ onLangChange = relocalize;
   } catch {
     $("engine-badge").textContent = t("engine.offline");
   }
+  const av = $("about-version");
+  if (av) av.textContent = state.engineVer || "";
+  const repo = $("about-repo");
+  if (repo) repo.addEventListener("click", () => copyText(repo.textContent.trim()));
   await reparse();
   renderResults();
   renderPatterns();

@@ -43,11 +43,13 @@
           <nav id="nav">
             <button class="nav-item active" data-view="workspace" data-icon="grid"><span class="ico"></span><span data-i18n="nav.workspace">Workspace</span></button>
             <button class="nav-item" data-view="asmscan" data-icon="search"><span class="ico"></span><span data-i18n="nav.asmscan">Assembly scan</span></button>
+            <button class="nav-item" data-view="sigmaker" data-icon="layers"><span class="ico"></span><span data-i18n="nav.sigmaker">Signature maker</span></button>
             <button class="nav-item" data-view="patterns" data-icon="file-code"><span class="ico"></span><span data-i18n="nav.patterns">Patterns</span></button>
             <button class="nav-item" data-view="editor" data-icon="terminal"><span class="ico"></span><span data-i18n="nav.editor">Editor</span></button>
             <button class="nav-item" data-view="output" data-icon="database"><span class="ico"></span><span data-i18n="nav.output">Output</span></button>
             <button class="nav-item" data-view="history" data-icon="history"><span class="ico"></span><span data-i18n="nav.history">History</span></button>
             <button class="nav-item" data-view="settings" data-icon="settings"><span class="ico"></span><span data-i18n="nav.settings">Settings</span></button>
+            <button class="nav-item" data-view="about" data-icon="info"><span class="ico"></span><span data-i18n="nav.about">About</span></button>
           </nav>
           <div class="side-foot">
             <div class="engine-card">
@@ -234,6 +236,53 @@
               <div class="panel table-scroll grow" id="asm-results"><div class="insp-hint" data-i18n="asm.empty">Enter assembly lines and press Scan.</div></div>
             </section>
 
+            <section class="view" id="view-sigmaker">
+              <div class="simple-head">
+                <div><h2 data-i18n="sig.title">Signature maker</h2><p class="muted" data-i18n="sig.sub">Generate a cross-version signature from client files</p></div>
+                <div class="head-actions">
+                  <button id="sig-pick" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="sig.pick">Pick files</span></button>
+                  <button id="sig-json" class="btn btn-soft" hidden><span class="ico" data-icon="file-code"></span><span data-i18n="sig.json">JSON</span></button>
+                  <button id="sig-gen" class="btn btn-primary"><span class="ico" data-icon="play"></span><span data-i18n="sig.generate">Generate</span></button>
+                </div>
+              </div>
+              <div id="sig-files" class="sig-files"></div>
+              <div id="sig-alert" class="sig-alert" hidden></div>
+              <div class="sig-modes">
+                <div id="sig-mode-tabs" class="tabs">
+                  <button class="tab active" data-mode="aob" data-i18n="sig.modeAob">From signature</button>
+                  <button class="tab" data-mode="ref" data-i18n="sig.modeRef">From address</button>
+                  <button class="tab" data-mode="both" data-i18n="sig.modeBoth">Both</button>
+                </div>
+                <div id="sig-both-opts" class="sig-both-opts" hidden>
+                  <div id="sig-cross-toggle" class="seg">
+                    <button class="seg-btn active" data-cross="separate" data-i18n="sig.separate">Separate</button>
+                    <button class="seg-btn" data-cross="cross" data-i18n="sig.cross">Cross-validate</button>
+                  </div>
+                  <span id="sig-cross-hint" class="muted" data-i18n="sig.separateHint">Signature and address are independent targets.</span>
+                </div>
+                <div id="sig-aob-row" class="sig-mode-row">
+                  <div class="sig-field-head">
+                    <span class="muted" data-i18n="sig.aobLabel">Signatures (one per line)</span>
+                    <button class="icon-btn sig-load" data-target="sig-aob" data-i18n="sig.loadFile">Load file</button>
+                  </div>
+                  <textarea id="sig-aob" class="mono d-sig sig-batch" spellcheck="false" rows="2" data-i18n-ph="sig.aobPh" placeholder="48 8B ?? ?? ?? ??"></textarea>
+                </div>
+                <div id="sig-ref-row" class="sig-mode-row" hidden>
+                  <div class="sig-ref-pick">
+                    <span class="muted" data-i18n="sig.refLabel">Reference client</span>
+                    <select id="sig-ref" class="select"></select>
+                  </div>
+                  <div class="sig-field-head">
+                    <span class="muted" data-i18n="sig.rvaLabel">Addresses, RVA (one per line)</span>
+                    <button class="icon-btn sig-load" data-target="sig-rva" data-i18n="sig.loadFile">Load file</button>
+                  </div>
+                  <textarea id="sig-rva" class="mono sig-batch" spellcheck="false" rows="2" data-i18n-ph="sig.rvaPh" placeholder="0x…"></textarea>
+                </div>
+              </div>
+              <input type="file" id="sig-file-input" accept=".txt,.csv,.log,text/plain" hidden />
+              <div class="panel table-scroll grow" id="sig-results"><div class="insp-hint" data-i18n="sig.empty">Pick client files and a target, then Generate.</div></div>
+            </section>
+
             <section class="view" id="view-patterns">
               <div class="simple-head">
                 <div><h2 data-i18n="pat.title">Patterns</h2><p id="pattern-count" class="muted">0 patterns</p></div>
@@ -249,7 +298,7 @@
               </div>
               <div class="panel table-scroll grow">
                 <table class="grid-table">
-                  <thead><tr><th data-i18n="col.name">Name</th><th data-i18n="col.kind">Kind</th><th data-i18n="col.category">Category</th><th data-i18n="col.signature">Signature</th><th data-i18n="col.note">Note</th><th></th></tr></thead>
+                  <thead><tr><th data-i18n="col.name">Name</th><th data-i18n="col.type">Type</th><th data-i18n="col.category">Category</th><th data-i18n="col.signature">Signature</th><th data-i18n="col.note">Note</th><th></th></tr></thead>
                   <tbody id="pattern-body"></tbody>
                 </table>
               </div>
@@ -331,6 +380,35 @@
                 </div>
               </div>
             </section>
+            <section class="view" id="view-about">
+              <div class="simple-head">
+                <div><h2 data-i18n="about.title">About</h2><p class="muted" data-i18n="about.sub">Version, license, and project information.</p></div>
+              </div>
+              <div class="settings-wrap">
+                <div class="settings-card">
+                  <div class="settings-card-head">
+                    <span class="ico" data-icon="info"></span>
+                    <div>
+                      <h3>MapleDumper <span class="about-ver mono" id="about-version"></span></h3>
+                      <p data-i18n="about.tagline">Cross-version signature and offset toolkit for MapleStory clients.</p>
+                    </div>
+                  </div>
+                  <div class="about-body">
+                    <p data-i18n="about.desc">MapleDumper finds, generates, and validates byte signatures and offsets that survive client patches. Feed it several client builds and it produces the highest-confidence pattern that resolves the same target in every version.</p>
+                    <ul class="about-features">
+                      <li data-i18n="about.f1">Cross-version Signature Maker with confidence grading.</li>
+                      <li data-i18n="about.f2">Assembly scan, pattern editor, and version history comparison.</li>
+                      <li data-i18n="about.f3">Privacy mask for safe screenshots and sharing.</li>
+                    </ul>
+                    <div class="about-meta">
+                      <div class="about-row"><span class="about-key" data-i18n="about.licenseLabel">License</span><span>MIT</span></div>
+                      <div class="about-row"><span class="about-key" data-i18n="about.repoLabel">Repository</span><span class="mono copyable" id="about-repo" title="github.com/TajuC/MapleDumper-rs">github.com/TajuC/MapleDumper-rs</span></div>
+                    </div>
+                    <p class="muted about-hint" data-i18n="about.copyHint">Click to copy</p>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </main>
       </div>
@@ -353,6 +431,7 @@
     </div>
 
     <div id="toast" class="toast" hidden></div>
+    <div id="ctx-menu" class="ctx-menu" hidden></div>
 
     <script src="app.js"></script>
   </body>
