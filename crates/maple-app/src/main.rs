@@ -391,7 +391,10 @@ fn run_scan(
         let _ = history::insert_scan(&mut conn, &record, &new_findings);
     }
 
-    *last.lock().unwrap() = Some(LastScan {
+    let mut guard = last
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = Some(LastScan {
         findings: result.findings,
         module_name,
         module_base,
@@ -544,7 +547,10 @@ fn cancel_scan(state: tauri::State<'_, AppState>) {
 
 #[tauri::command]
 fn export_text(state: tauri::State<'_, AppState>, format: String) -> Result<String, String> {
-    let guard = state.last.lock().unwrap();
+    let guard = state
+        .last
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let last = guard
         .as_ref()
         .ok_or_else(|| "run a scan first; there is nothing to export yet".to_string())?;
@@ -1244,15 +1250,26 @@ async fn generate_signature(
     }
 }
 
+fn open_history_db() -> Connection {
+    let path = history::default_db_path();
+    match history::open(&path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!(
+                "[warn] could not open history database at {}: {e}; history will not be saved this session",
+                path.display()
+            );
+            history::open_memory()
+        }
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
             cancel: Arc::new(AtomicBool::new(false)),
             last: Arc::new(Mutex::new(None)),
-            db: Arc::new(Mutex::new(
-                history::open(&history::default_db_path())
-                    .unwrap_or_else(|_| history::open_memory()),
-            )),
+            db: Arc::new(Mutex::new(open_history_db())),
         })
         .invoke_handler(tauri::generate_handler![
             engine_version,
