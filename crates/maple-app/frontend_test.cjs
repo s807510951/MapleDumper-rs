@@ -115,7 +115,13 @@ const driver = `
 const i18nCode = fs.readFileSync(path.join(__dirname, "frontend", "i18n.js"), "utf8");
 const iconsCode = fs.readFileSync(path.join(__dirname, "frontend", "icons.js"), "utf8");
 const maskingCode = fs.readFileSync(path.join(__dirname, "frontend", "masking.js"), "utf8");
-const code = i18nCode + iconsCode + maskingCode + fs.readFileSync(path.join(__dirname, "frontend", "app.js"), "utf8") + driver;
+const sigCode = fs.readFileSync(path.join(__dirname, "frontend", "sigmaker.js"), "utf8");
+const histCode = fs.readFileSync(path.join(__dirname, "frontend", "history.js"), "utf8");
+const readFront = (f) => fs.readFileSync(path.join(__dirname, "frontend", f), "utf8");
+const code =
+  i18nCode + iconsCode + maskingCode + sigCode + histCode +
+  readFront("asmscan.js") + readFront("workspace.js") + readFront("patterns.js") + readFront("editor.js") +
+  readFront("app.js") + driver;
 try {
   vm.runInNewContext(code, sandbox, { filename: "app.js" });
 } catch (e) {
