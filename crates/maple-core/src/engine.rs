@@ -4,6 +4,7 @@ use crate::output::Finding;
 use crate::pattern::{Arch, Pattern};
 use crate::resolver::{self, Kind, ResolverSpec};
 use crate::scanner::{self, CompiledPattern, ScannerIndex};
+use crate::sigmaker::{ImageInput, resolve_string_anchor};
 use rayon::prelude::*;
 use std::hint::black_box;
 use std::time::Instant;
@@ -370,6 +371,83 @@ fn compile_patterns(patterns: &[Pattern]) -> Vec<CompiledPat> {
         .collect()
 }
 
+impl ScanResult {
+    pub fn merge(&mut self, other: ScanResult) {
+        self.findings.extend(other.findings);
+        self.rows.extend(other.rows);
+        self.found.extend(other.found);
+        self.matched_unresolved.extend(other.matched_unresolved);
+        self.not_found.extend(other.not_found);
+        self.total_matches += other.total_matches;
+    }
+}
+
+/// Resolve the string-anchored patterns against an image view, live target or file. Byte-scanned
+/// patterns are ignored here; run [`scan`] for those and [`ScanResult::merge`] the two results.
+#[must_use]
+pub fn resolve_string_anchors(img: &ImageInput, patterns: &[Pattern]) -> ScanResult {
+    let mut out = ScanResult {
+        findings: Vec::new(),
+        rows: Vec::new(),
+        found: Vec::new(),
+        matched_unresolved: Vec::new(),
+        not_found: Vec::new(),
+        total_matches: 0,
+    };
+    for p in patterns {
+        let Some(anchor) = &p.string_anchor else {
+            continue;
+        };
+        let (_, base) = Kind::classify(&p.name);
+        let category = p
+            .category
+            .clone()
+            .unwrap_or_else(|| crate::categorizer::builtin_category(base).to_string());
+        let note = p.note.clone().unwrap_or_default();
+        let pattern = match &anchor.also {
+            Some(also) => format!("@string={} @also={also}", anchor.text),
+            None => format!("@string={}", anchor.text),
+        };
+        match resolve_string_anchor(img, anchor) {
+            Some(rva) => {
+                let value = rva as u64;
+                out.found.push(p.name.clone());
+                out.total_matches += 1;
+                out.findings.push(Finding {
+                    name: base.to_string(),
+                    category: category.clone(),
+                    value,
+                    is_offset: true,
+                });
+                out.rows.push(PatternRow {
+                    name: base.to_string(),
+                    category,
+                    pattern,
+                    value: Some(value),
+                    is_offset: true,
+                    matches: 1,
+                    status: FindingStatus::FoundUnique,
+                    note,
+                });
+            }
+            None => {
+                out.not_found.push(p.name.clone());
+                out.rows.push(PatternRow {
+                    name: base.to_string(),
+                    category,
+                    pattern,
+                    value: None,
+                    is_offset: false,
+                    matches: 0,
+                    status: FindingStatus::NotFound,
+                    note,
+                });
+            }
+        }
+    }
+    out
+}
+
 #[derive(Clone, Copy)]
 struct Probe {
     buf: usize,
@@ -672,6 +750,45 @@ mod tests {
                 .iter()
                 .all(|r| r.status == FindingStatus::FoundUnique)
         );
+    }
+
+    #[test]
+    fn resolves_a_string_anchored_pattern() {
+        let base = 0x1000usize;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        mem[0x100] = 0x68;
+        mem[0x101..0x105].copy_from_slice(&0x1010u32.to_le_bytes());
+        let source = BufferSource::new(base, mem);
+        let img = ImageInput {
+            label: String::new(),
+            source: &source,
+            base,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x100,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x100,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        let patterns = parse_patterns("Stat = @string=MapleStory", Arch::X86);
+        let result = resolve_string_anchors(&img, &patterns);
+        assert_eq!(result.found, vec!["Stat".to_string()]);
+        let stat = result.findings.iter().find(|f| f.name == "Stat").unwrap();
+        assert_eq!(stat.value, 0x101);
+        assert!(stat.is_offset);
     }
 
     #[test]
