@@ -238,6 +238,41 @@ pub struct HoldoutResult {
     pub matched_holdout: bool,
 }
 
+/// The detectable identity of a client build: architecture, whether it is packed, the code size, and
+/// the code-section hash. These are the signals that gate whether two builds belong to the same lane;
+/// a human variant label (GMS, KMS, MSEA, a private fork) is operator-supplied, since it is not
+/// reliably derivable from the binary alone.
+#[derive(Clone, Debug)]
+pub struct BuildProfile {
+    pub arch: Arch,
+    pub packed: bool,
+    pub code_bytes: usize,
+    pub code_hash: u64,
+}
+
+impl BuildProfile {
+    #[must_use]
+    pub fn of(img: &ImageInput) -> Self {
+        Self {
+            arch: img.arch,
+            packed: img.packed,
+            code_bytes: img.code_regions.iter().map(|r| r.size).sum(),
+            code_hash: img.code_hash,
+        }
+    }
+
+    /// Two builds share a lane only when they agree on architecture and pack state. Mixing an x86
+    /// with an x64 build, or a packed with an unpacked one, is never the same function space, so a
+    /// cross-version or holdout comparison across them is meaningless.
+    #[must_use]
+    pub fn same_variant(&self, other: &Self) -> bool {
+        matches!(
+            (self.arch, other.arch),
+            (Arch::X64, Arch::X64) | (Arch::X86, Arch::X86)
+        ) && self.packed == other.packed
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SigReport {
     pub arch: Arch,
@@ -1635,6 +1670,19 @@ mod tests {
             "got {:?}",
             id.strings
         );
+    }
+
+    #[test]
+    fn build_profile_separates_arch_and_pack_lanes() {
+        let src = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let mut a = img("a", &src, 0x1000, 49);
+        let mut b = img("b", &src, 0x1000, 49);
+        assert!(BuildProfile::of(&a).same_variant(&BuildProfile::of(&b)));
+        b.arch = Arch::X86;
+        assert!(!BuildProfile::of(&a).same_variant(&BuildProfile::of(&b)));
+        b.arch = Arch::X64;
+        a.packed = true;
+        assert!(!BuildProfile::of(&a).same_variant(&BuildProfile::of(&b)));
     }
 
     #[test]
