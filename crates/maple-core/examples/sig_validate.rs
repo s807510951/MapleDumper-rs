@@ -4,19 +4,20 @@
 // The unpacked client drives semantic identity; the packed ones only exercise pack detection, since
 // their .text is encrypted at rest. Negatives confirm a generated signature stays unique elsewhere.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use maple_core::{
-    FileImage, ImageInput, Region, SigOptions, TargetSpec, fn_identity, generate,
-    negative_corpus_hits, xref_count,
+    BuildProfile, FileImage, ImageInput, Region, SigOptions, TargetSpec, fn_identity, generate,
+    holdout_validate, negative_corpus_hits, xref_count,
 };
 
 struct Args {
     unpacked: Option<PathBuf>,
     packed: Vec<PathBuf>,
     negative: Vec<PathBuf>,
+    cross: Vec<PathBuf>,
     samples: usize,
 }
 
@@ -25,6 +26,7 @@ fn parse_args() -> Args {
         unpacked: None,
         packed: Vec::new(),
         negative: Vec::new(),
+        cross: Vec::new(),
         samples: 200,
     };
     let mut it = std::env::args().skip(1);
@@ -33,11 +35,18 @@ fn parse_args() -> Args {
             "--unpacked" => a.unpacked = it.next().map(PathBuf::from),
             "--packed" => a.packed.extend(it.next().map(PathBuf::from)),
             "--negative" => a.negative.extend(it.next().map(PathBuf::from)),
+            "--cross" => a.cross.extend(it.next().map(PathBuf::from)),
             "--samples" => a.samples = it.next().and_then(|s| s.parse().ok()).unwrap_or(a.samples),
             other => eprintln!("ignoring unknown argument {other}"),
         }
     }
     a
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| p.display().to_string())
 }
 
 fn input_of<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
@@ -251,33 +260,166 @@ fn report_negatives(input: &ImageInput, probe_rva: usize, paths: &[PathBuf]) {
     );
 }
 
-fn main() {
-    let args = parse_args();
-    let Some(unpacked) = args.unpacked else {
-        eprintln!("error: --unpacked <exe> is required");
-        std::process::exit(2);
-    };
+fn report_cross(paths: &[PathBuf], samples: usize) {
+    let opened: Vec<_> = paths
+        .iter()
+        .filter_map(|p| Some((file_name(p), FileImage::open(p).ok()?)))
+        .collect();
+    if opened.len() < 3 {
+        eprintln!("cross-version needs at least 3 openable builds");
+        return;
+    }
+    let inputs: Vec<_> = opened
+        .iter()
+        .map(|(name, img)| input_of(name, img))
+        .collect();
+    let profiles: Vec<_> = inputs.iter().map(BuildProfile::of).collect();
+    let same_lane = profiles[1..].iter().all(|p| profiles[0].same_variant(p));
+    println!(
+        "== cross-version over {} builds (arch {:?}, same lane {same_lane}) ==",
+        inputs.len(),
+        profiles[0].arch
+    );
+    for (input, prof) in inputs.iter().zip(&profiles) {
+        println!(
+            "  {} | code {} bytes | packed {}",
+            input.label, prof.code_bytes, prof.packed
+        );
+    }
+    if !same_lane {
+        println!("  refusing to mix architecture or pack state");
+        return;
+    }
 
+    let targets = call_targets(&inputs[0]);
+    let step = (targets.len() / samples.max(1)).max(1);
+    let sampled: Vec<_> = targets
+        .iter()
+        .copied()
+        .step_by(step)
+        .take(samples)
+        .collect();
+    let opts = SigOptions::default();
+
+    let t = Instant::now();
+    let fp_counts = |inp: &ImageInput| {
+        call_targets(inp)
+            .iter()
+            .fold(BTreeMap::<String, usize>::new(), |mut m, &rva| {
+                *m.entry(fn_identity(inp, rva).fingerprint()).or_default() += 1;
+                m
+            })
+    };
+    let maps: Vec<_> = inputs.iter().map(fp_counts).collect();
+    let trackable = sampled
+        .iter()
+        .filter(|&&rva| {
+            let fp = fn_identity(&inputs[0], rva).fingerprint();
+            maps.iter().all(|m| m.get(&fp) == Some(&1))
+        })
+        .count();
+    println!(
+        "  exact-identity tracking: {trackable}/{} sampled functions identical in every build ({:.0}%) in {} ms",
+        sampled.len(),
+        100.0 * trackable as f64 / sampled.len().max(1) as f64,
+        t.elapsed().as_millis()
+    );
+
+    let t = Instant::now();
+    let string_sets = |inp: &ImageInput| {
+        call_targets(inp)
+            .iter()
+            .filter_map(|&rva| Some(fn_identity(inp, rva).strings).filter(|s| !s.is_empty()))
+            .fold(BTreeMap::<Vec<String>, usize>::new(), |mut m, s| {
+                *m.entry(s).or_default() += 1;
+                m
+            })
+    };
+    let str_maps: Vec<_> = inputs.iter().map(string_sets).collect();
+    let (str_tracked, str_total) = str_maps[0].iter().filter(|&(_, &c)| c == 1).fold(
+        (0usize, 0usize),
+        |(tracked, total), (s, _)| {
+            let unique_everywhere = str_maps[1..].iter().all(|m| m.get(s) == Some(&1));
+            (tracked + usize::from(unique_everywhere), total + 1)
+        },
+    );
+    println!(
+        "  string-anchored tracking: {str_tracked}/{str_total} distinctively string-referencing functions tracked uniquely across every build ({:.0}%) in {} ms",
+        100.0 * str_tracked as f64 / str_total.max(1) as f64,
+        t.elapsed().as_millis()
+    );
+
+    let t = Instant::now();
+    let grades = sampled
+        .iter()
+        .fold(BTreeMap::<String, usize>::new(), |mut acc, &rva| {
+            let spec = TargetSpec::Ref {
+                image: 0,
+                rva: rva as u64,
+            };
+            if let Some(c) = generate(&inputs, &spec, &opts).chosen {
+                *acc.entry(c.grade.letter().to_string()).or_default() += 1;
+            }
+            acc
+        });
+    let made: usize = grades.values().sum();
+    println!(
+        "  signatures for {made}/{} targets ({:.0}%) in {} ms; grades {grades:?}",
+        sampled.len(),
+        100.0 * made as f64 / sampled.len().max(1) as f64,
+        t.elapsed().as_millis()
+    );
+
+    let probe: Vec<_> = sampled.iter().copied().take(16).collect();
+    let t = Instant::now();
+    let (pass, total) = probe.iter().fold((0usize, 0usize), |(pass, total), &rva| {
+        let spec = TargetSpec::Ref {
+            image: 0,
+            rva: rva as u64,
+        };
+        holdout_validate(&inputs, &spec, &opts)
+            .iter()
+            .fold((pass, total), |(p, t), r| {
+                (p + usize::from(r.matched_holdout), t + 1)
+            })
+    });
+    println!(
+        "  holdout over {} probed targets in {} ms: {pass}/{total} held-out builds re-matched",
+        probe.len(),
+        t.elapsed().as_millis()
+    );
+}
+
+fn report_unpacked_client(unpacked: &Path, args: &Args) {
     println!("== unpacked client: {} ==", unpacked.display());
-    let img = match FileImage::open(&unpacked) {
+    let img = match FileImage::open(unpacked) {
         Ok(img) => img,
-        Err(e) => {
-            eprintln!("open failed: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => return eprintln!("open failed: {e}"),
     };
     let input = input_of("unpacked", &img);
     let targets = call_targets(&input);
     report_unpacked(&input, &img, &targets, args.samples);
-
     args.packed
         .iter()
         .map(PathBuf::as_path)
         .for_each(report_packed);
-
     if let Some(&probe) = targets.first()
         && !args.negative.is_empty()
     {
         report_negatives(&input, probe, &args.negative);
+    }
+}
+
+fn main() {
+    let args = parse_args();
+    if args.unpacked.is_none() && args.cross.is_empty() {
+        eprintln!("error: pass --unpacked <exe> and/or --cross <exe> ...");
+        std::process::exit(2);
+    }
+    if let Some(unpacked) = &args.unpacked {
+        report_unpacked_client(unpacked, &args);
+    }
+    if !args.cross.is_empty() {
+        report_cross(&args.cross, args.samples);
     }
 }
