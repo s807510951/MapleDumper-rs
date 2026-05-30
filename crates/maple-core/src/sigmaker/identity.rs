@@ -256,7 +256,7 @@ fn xref_sites(img: &ImageInput, data_abs: usize) -> Vec<usize> {
 // Walk back to the nearest standard x86 frame prologue so an anchor resolves to the function entry,
 // not the mid-body reference. This also collapses several references inside one function to a single
 // site. x64 prologues vary too much to pin this way, so there the reference site stands.
-fn enclosing_function(img: &ImageInput, site_rva: usize) -> usize {
+pub(super) fn enclosing_function(img: &ImageInput, site_rva: usize) -> usize {
     if !matches!(img.arch, Arch::X86) {
         return site_rva;
     }

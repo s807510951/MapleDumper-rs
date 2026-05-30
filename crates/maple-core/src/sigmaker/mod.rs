@@ -308,6 +308,43 @@ fn confidence_score(grade: Grade, fixed_ratio: f64, reloc_safe: bool, fp_consist
     s.round().min(100.0) as u32
 }
 
+fn string_anchor_candidate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+) -> Option<SigCandidate> {
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let anchor = make_string_anchor(&images[ref_idx], entry)?;
+    let mut per_version = Vec::with_capacity(required.len());
+    for &idx in required {
+        let resolved = resolve_string_anchor(&images[idx], &anchor)? as u64;
+        per_version.push(PerVersion {
+            label: images[idx].label.clone(),
+            match_rva: Some(resolved),
+            resolved_target_rva: Some(resolved),
+            target_kind: Some(TargetKind::Code),
+        });
+    }
+    let aob = match &anchor.also {
+        Some(also) => format!("@string={} @also={also}", anchor.text),
+        None => format!("@string={}", anchor.text),
+    };
+    Some(SigCandidate {
+        aob,
+        suffix: Suffix::None,
+        grade: Grade::A,
+        score: confidence_score(Grade::A, 1.0, true, true),
+        bytes_len: anchor.text.len(),
+        fixed: anchor.text.len(),
+        wildcards: 0,
+        fixed_ratio: 1.0,
+        reloc_safe: true,
+        per_version,
+        diags: Vec::new(),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finalize(
     images: &[ImageInput],
@@ -785,6 +822,7 @@ pub fn generate_with_progress(
     let cache_of = |idx: usize| &caches.iter().find(|(i, _)| *i == idx).unwrap().1;
 
     progress(SigStage::LocatingTarget);
+    let mut aob_found: Vec<(usize, u64)> = Vec::new();
     let (ref_idx, ref_rva, _seed_len, seed_mask): (usize, u64, usize, Option<Vec<bool>>) =
         match spec {
             TargetSpec::Aob(aob) => {
@@ -801,11 +839,10 @@ pub fn generate_with_progress(
                     });
                     return fail(diagnostics, unique_builds, dup_groups);
                 };
-                let mut chosen_ref = None;
                 for &idx in &required {
                     let (count, rva) = cache_of(idx).locate(&pat);
                     match (count, rva) {
-                        (1, Some(r)) if chosen_ref.is_none() => chosen_ref = Some((idx, r)),
+                        (1, Some(r)) => aob_found.push((idx, r)),
                         (0, _) => diagnostics.push(Diag::MissingInImage {
                             label: images[idx].label.clone(),
                         }),
@@ -816,7 +853,7 @@ pub fn generate_with_progress(
                         _ => {}
                     }
                 }
-                let Some((idx, r)) = chosen_ref else {
+                let Some(&(idx, r)) = aob_found.first() else {
                     return fail(diagnostics, unique_builds, dup_groups);
                 };
                 (idx, r, sig.bytes.len(), Some(sig.mask))
@@ -908,6 +945,11 @@ pub fn generate_with_progress(
     }
 
     progress(SigStage::Scoring);
+    if pool.is_empty()
+        && let Some(anchor_cand) = string_anchor_candidate(images, &required, ref_idx, ref_rva)
+    {
+        pool.push(anchor_cand);
+    }
     // confidence first, then fewest wildcards / shortest / kind / AOB text, so the same inputs
     // always pick the same winner
     pool.sort_by(|a, b| {
@@ -929,6 +971,12 @@ pub fn generate_with_progress(
     let chosen = (!pool.is_empty()).then(|| pool.remove(0));
     let alternates = pool;
     if chosen.is_none() {
+        for &(idx, rva) in &aob_found {
+            diagnostics.push(Diag::FoundInBuild {
+                label: images[idx].label.clone(),
+                rva,
+            });
+        }
         diagnostics.push(Diag::NotUnique);
     }
 
@@ -1385,6 +1433,79 @@ mod tests {
         let anchor = make_string_anchor(&input, 0x103).expect("a paired anchor");
         assert!(anchor.also.is_some());
         assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x100));
+    }
+
+    #[test]
+    fn string_anchor_fallback_when_byte_aob_only_matches_one_build() {
+        // Both builds hold the same function: an x86 prologue that pushes the address of a shared,
+        // distinctive string. Their tails differ, so a byte AOB taken from the first build cannot be
+        // made unique across both, and generation must fall back to the recompile-stable string
+        // anchor instead of giving up.
+        let build = |hash: u64, tail: [u8; 5]| {
+            let mut mem = vec![0u8; 0x200];
+            mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+            mem[0x100..0x103].copy_from_slice(&[0x55, 0x8B, 0xEC]); // push ebp ; mov ebp, esp
+            mem[0x103] = 0x68; // push imm32 of the string address
+            mem[0x104..0x108].copy_from_slice(&0x1010u32.to_le_bytes());
+            mem[0x108..0x10D].copy_from_slice(&tail);
+            (BufferSource::new(0x1000, mem), hash)
+        };
+        // the tails differ in the opcode byte, not just an immediate, so operand-masking the seed
+        // AOB cannot reconcile the two builds and the byte path is forced to give up.
+        let (a_src, a_hash) = build(1, [0xB8, 0xEF, 0xBE, 0xAD, 0xDE]); // mov eax, 0xDEADBEEF
+        let (b_src, b_hash) = build(2, [0xB9, 0x11, 0x22, 0x33, 0x44]); // mov ecx, 0x44332211
+        fn make_input<'a>(label: &str, src: &'a BufferSource, hash: u64) -> ImageInput<'a> {
+            ImageInput {
+                label: label.to_string(),
+                source: src,
+                base: 0x1000,
+                size: 0x200,
+                code_regions: vec![Region {
+                    base: 0x1100,
+                    size: 0x100,
+                }],
+                regions: vec![
+                    Region {
+                        base: 0x1000,
+                        size: 0x100,
+                    },
+                    Region {
+                        base: 0x1100,
+                        size: 0x100,
+                    },
+                ],
+                import: None,
+                arch: Arch::X86,
+                code_hash: hash,
+                packed: false,
+                pack_reasons: Vec::new(),
+                reloc: None,
+            }
+        }
+        let images = [
+            make_input("a", &a_src, a_hash),
+            make_input("b", &b_src, b_hash),
+        ];
+        // matches only build a: the DEADBEEF tail does not exist in build b
+        let aob = "55 8B EC 68 10 10 00 00 B8 EF BE AD DE";
+        let report = generate(
+            &images,
+            &TargetSpec::Aob(aob.to_string()),
+            &SigOptions::default(),
+        );
+        let cand = report.chosen.expect("a string-anchor fallback candidate");
+        assert!(
+            cand.aob.starts_with("@string="),
+            "expected a string anchor, got {}",
+            cand.aob
+        );
+        assert_eq!(cand.aob, "@string=MapleStory");
+        assert_eq!(cand.per_version.len(), 2);
+        assert!(
+            cand.per_version
+                .iter()
+                .all(|p| p.resolved_target_rva == Some(0x100))
+        );
     }
 
     #[test]

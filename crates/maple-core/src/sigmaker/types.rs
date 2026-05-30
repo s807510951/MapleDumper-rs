@@ -75,6 +75,7 @@ pub enum Diag {
     MixedArch,
     PackedInput { label: String, reasons: Vec<String> },
     MissingInImage { label: String },
+    FoundInBuild { label: String, rva: u64 },
     AmbiguousInImage { label: String, count: usize },
     StreamDiverges { label: String, offset: usize },
     UnsupportedReloc { rva: usize, reloc_type: u8 },
@@ -98,6 +99,7 @@ impl std::fmt::Display for Diag {
                 write!(f, "packed input {label}: {}", reasons.join("; "))
             }
             Diag::MissingInImage { label } => write!(f, "not found in {label}"),
+            Diag::FoundInBuild { label, rva } => write!(f, "found in {label} at 0x{rva:X}"),
             Diag::AmbiguousInImage { label, count } => write!(f, "{count} matches in {label}"),
             Diag::StreamDiverges { label, offset } => {
                 write!(f, "instruction stream diverges in {label} at +0x{offset:X}")
