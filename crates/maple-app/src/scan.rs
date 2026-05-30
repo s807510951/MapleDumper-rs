@@ -47,6 +47,11 @@ pub struct RowView {
     status: String,
     note: String,
     pattern: String,
+    confidence: u8,
+    trace: Option<String>,
+    /// The structured resolution trace, so the Inspector can show instruction/operand/target facts.
+    trace_detail: Option<maple_core::ResolveTrace>,
+    candidates: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -63,13 +68,45 @@ pub struct ScanReport {
     scan_ms: u128,
     bytes_scanned: u64,
     regions: usize,
+    regions_detail: Vec<RegionView>,
     build_hash: String,
     build_version: Option<String>,
+    /// Non-fatal problems the user should see: a failed history save, for example, which used to be
+    /// logged to stderr only and left the scan looking fully successful.
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct RegionView {
+    base: String,
+    size: i64,
+    findings: i64,
 }
 
 #[tauri::command]
 pub fn engine_version() -> String {
     maple_core::VERSION.to_string()
+}
+
+/// A stable BLAKE3 of the pattern set, order-independent, so a saved scan records exactly which
+/// patterns produced it. Each pattern contributes its name and its AOB (or string-anchor form).
+#[cfg(windows)]
+fn pattern_set_hash(patterns: &[maple_core::pattern::Pattern]) -> String {
+    let mut parts: Vec<String> = patterns
+        .iter()
+        .map(|p| {
+            let body = match &p.string_anchor {
+                Some(a) => match &a.also {
+                    Some(also) => format!("@string={} @also={also}", a.text),
+                    None => format!("@string={}", a.text),
+                },
+                None => p.signature.to_aob(),
+            };
+            format!("{}\u{1}{body}", p.name)
+        })
+        .collect();
+    parts.sort();
+    history::content_hash(parts.join("\u{2}").as_bytes())
 }
 
 #[tauri::command]
@@ -125,18 +162,28 @@ fn run_scan(
         poll: Duration::from_millis(300),
     };
 
-    let patterns = match maple_core::pattern::parse_patterns_strict(&req.patterns, arch) {
-        Ok(parsed) => parsed.patterns,
-        Err(issues) => {
-            let detail = issues
-                .iter()
-                .filter(|i| i.severity == maple_core::pattern::ParseSeverity::Error)
-                .map(|i| format!("line {}: {}", i.line, i.message))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(format!("pattern errors: {detail}"));
-        }
-    };
+    let (patterns, parse_warnings) =
+        match maple_core::pattern::parse_patterns_strict(&req.patterns, arch) {
+            Ok(parsed) => {
+                // These were previously dropped on the floor; surface them so a weak or suffix-derived
+                // pattern is visible to the user instead of silently accepted.
+                let warns = parsed
+                    .warnings
+                    .iter()
+                    .map(|w| format!("pattern line {}: {}", w.line, w.message))
+                    .collect::<Vec<_>>();
+                (parsed.patterns, warns)
+            }
+            Err(issues) => {
+                let detail = issues
+                    .iter()
+                    .filter(|i| i.severity == maple_core::pattern::ParseSeverity::Error)
+                    .map(|i| format!("line {}: {}", i.line, i.message))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(format!("pattern errors: {detail}"));
+            }
+        };
     if patterns.is_empty() {
         return Err("no patterns to scan; the pattern list is empty".to_string());
     }
@@ -144,20 +191,37 @@ fn run_scan(
     let started = Instant::now();
     let target = Target::attach(&locator, &req.module, &opts, cancel).map_err(|e| e.to_string())?;
     let attach_ms = started.elapsed().as_millis();
+    // Fail clearly on a definite architecture mismatch instead of silently scanning the wrong
+    // bitness and reporting everything "not found".
+    if let Some(actual) = target.module_arch()
+        && actual != arch
+    {
+        let label = |a| if matches!(a, Arch::X64) { "x64" } else { "x86" };
+        return Err(format!(
+            "architecture mismatch: scanning as {} but {} is {}; switch the architecture and rescan",
+            label(arch),
+            req.module.trim(),
+            label(actual)
+        ));
+    }
     let module_base = target.module.base as u64;
+    // The module's executable regions, enumerated once and reused: as the scan set when
+    // `code_only`, as the `@section` validation set always, and for the build fingerprint below.
+    let code_regions = target.code_regions();
     let regions = if req.code_only {
-        target.code_regions()
+        code_regions.clone()
     } else {
         target.regions()
     };
     let bytes_scanned: u64 = regions.iter().map(|r| r.size as u64).sum();
     let region_count = regions.len();
     let scan_started = Instant::now();
-    let mut result = maple_core::scan(
+    let mut result = maple_core::scan_in(
         &target,
         target.module.base,
         target.module.size,
         &regions,
+        &code_regions,
         &patterns,
         arch,
     );
@@ -167,7 +231,7 @@ fn run_scan(
             source: &target,
             base: target.module.base,
             size: target.module.size,
-            code_regions: target.code_regions(),
+            code_regions: code_regions.clone(),
             regions: target.regions(),
             import: None,
             arch,
@@ -206,14 +270,42 @@ fn run_scan(
                 status: r.status.label().to_string(),
                 note: r.note.clone(),
                 pattern: r.pattern.clone(),
+                confidence: r.confidence,
+                trace: r.trace.clone(),
+                trace_detail: r.trace_detail.clone(),
+                candidates: r.candidates.iter().map(|v| format!("0x{v:X}")).collect(),
             }
         })
         .collect();
 
-    let mut stamp = BuildStamp::capture(&target, target.module.base, &target.code_regions());
+    let mut stamp = BuildStamp::capture(&target, target.module.base, &code_regions);
     stamp.version = target.file_version();
 
-    let report = ScanReport {
+    let module_addr = target.module.base;
+    let regions_detail: Vec<RegionView> = regions
+        .iter()
+        .map(|reg| {
+            let end = reg.base + reg.size;
+            let findings = result
+                .rows
+                .iter()
+                .filter(|r| {
+                    !r.is_offset
+                        && r.value.is_some_and(|v| {
+                            let abs = module_addr + v as usize;
+                            abs >= reg.base && abs < end
+                        })
+                })
+                .count();
+            RegionView {
+                base: format!("0x{:X}", reg.base),
+                size: reg.size as i64,
+                findings: findings as i64,
+            }
+        })
+        .collect();
+
+    let mut report = ScanReport {
         module_name: module_name.clone(),
         module_base: format!("0x{module_base:X}"),
         rows,
@@ -226,8 +318,15 @@ fn run_scan(
         scan_ms,
         bytes_scanned,
         regions: region_count,
+        regions_detail,
         build_hash: stamp.short(),
         build_version: stamp.version.clone(),
+        // Start with the parse-time advisories and the scan-time advisories (partial reads, @hits
+        // expectation violations); a later history-save failure appends to the same channel.
+        warnings: parse_warnings
+            .into_iter()
+            .chain(result.warnings.iter().cloned())
+            .collect(),
     };
 
     let new_findings: Vec<history::NewFinding> = result
@@ -249,6 +348,15 @@ fn run_scan(
                 matches: r.matches as i64,
                 note: r.note.clone(),
                 bytes,
+                confidence: i64::from(r.confidence),
+                trace: r.trace.clone(),
+                candidates: (r.candidates.len() > 1).then(|| {
+                    r.candidates
+                        .iter()
+                        .map(|v| format!("0x{v:X}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }),
             }
         })
         .collect();
@@ -272,11 +380,20 @@ fn run_scan(
         not_found: result.not_found.len() as i64,
         total_matches: result.total_matches as i64,
         scan_ms: scan_ms as i64,
+        module_size: target.module.size as i64,
+        pattern_set_hash: pattern_set_hash(&patterns),
+        scanner_version: maple_core::VERSION.to_string(),
     };
     {
         let mut conn = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Err(e) = history::insert_scan(&mut conn, &record, &new_findings) {
+            // Surface the failure to the user instead of only logging it: the scan still produced
+            // results, but it was not persisted to history, and silently dropping that reads as a
+            // clean save.
             eprintln!("[warn] failed to save scan to history: {e}");
+            report
+                .warnings
+                .push(format!("scan completed but was not saved to history: {e}"));
         }
     }
 

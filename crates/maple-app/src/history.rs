@@ -18,6 +18,12 @@ pub struct NewScan {
     pub not_found: i64,
     pub total_matches: i64,
     pub scan_ms: i64,
+    /// Full virtual size of the scanned module, so a saved scan records the module it ran against.
+    pub module_size: i64,
+    /// BLAKE3 of the canonical pattern set, so a scan can be tied to the exact patterns used.
+    pub pattern_set_hash: String,
+    /// The engine version that produced the scan.
+    pub scanner_version: String,
 }
 
 pub struct NewFinding {
@@ -29,6 +35,9 @@ pub struct NewFinding {
     pub matches: i64,
     pub note: String,
     pub bytes: Option<String>,
+    pub confidence: i64,
+    pub trace: Option<String>,
+    pub candidates: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -64,6 +73,9 @@ pub struct FindingRow {
     pub matches: i64,
     pub note: String,
     pub bytes: Option<String>,
+    pub confidence: Option<i64>,
+    pub trace: Option<String>,
+    pub candidates: Option<String>,
 }
 
 #[must_use]
@@ -76,7 +88,7 @@ pub fn default_db_path() -> PathBuf {
     dir.join("history.db")
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
@@ -112,7 +124,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                status TEXT NOT NULL,
                matches INTEGER NOT NULL,
                note TEXT NOT NULL,
-               bytes TEXT
+               bytes TEXT,
+               confidence INTEGER,
+               trace TEXT,
+               candidates TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
              CREATE INDEX IF NOT EXISTS idx_scans_build ON scans(build_hash);
@@ -128,6 +143,23 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // digests so a stale value can never collide with a new query and dedup two real scans.
         conn.execute("UPDATE scans SET result_hash = NULL", [])?;
         version = 2;
+    }
+    if version < 3 {
+        // Per-finding diagnostics. Nullable so rows written before this version read back as unknown
+        // rather than a fabricated zero confidence.
+        add_column_if_missing(conn, "findings", "confidence", "INTEGER")?;
+        add_column_if_missing(conn, "findings", "trace", "TEXT")?;
+        add_column_if_missing(conn, "findings", "candidates", "TEXT")?;
+        version = 3;
+    }
+    if version < 4 {
+        // Forensic provenance, so a saved scan can be tied back to the exact module and pattern set
+        // that produced it. Nullable: rows written before this version read back as unknown rather
+        // than a fabricated zero or empty hash.
+        add_column_if_missing(conn, "scans", "module_size", "INTEGER")?;
+        add_column_if_missing(conn, "scans", "pattern_set_hash", "TEXT")?;
+        add_column_if_missing(conn, "scans", "scanner_version", "TEXT")?;
+        version = 4;
     }
 
     conn.execute_batch(&format!("PRAGMA user_version = {version}"))?;
@@ -216,8 +248,8 @@ pub fn insert_scan(
     tx.execute(
         "INSERT INTO scans (created_at, module, module_base, arch, build_hash, build_version,
             build_timestamp, bytes, regions, found, unresolved, not_found, total_matches, scan_ms,
-            result_hash)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            result_hash, module_size, pattern_set_hash, scanner_version)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         params![
             scan.created_at,
             scan.module,
@@ -234,13 +266,16 @@ pub fn insert_scan(
             scan.total_matches,
             scan.scan_ms,
             rhash,
+            scan.module_size,
+            scan.pattern_set_hash,
+            scan.scanner_version,
         ],
     )?;
     let id = tx.last_insert_rowid();
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO findings (scan_id, name, category, value, is_offset, status, matches, note, bytes)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO findings (scan_id, name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )?;
         for f in findings {
             stmt.execute(params![
@@ -253,6 +288,9 @@ pub fn insert_scan(
                 f.matches,
                 f.note,
                 f.bytes,
+                f.confidence,
+                f.trace,
+                f.candidates,
             ])?;
         }
     }
@@ -333,7 +371,7 @@ pub fn scan_row(conn: &Connection, scan_id: i64) -> rusqlite::Result<Option<Scan
 
 pub fn findings(conn: &Connection, scan_id: i64) -> rusqlite::Result<Vec<FindingRow>> {
     let mut stmt = conn.prepare(
-        "SELECT name, category, value, is_offset, status, matches, note, bytes
+        "SELECT name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates
          FROM findings WHERE scan_id = ?1 ORDER BY category, name",
     )?;
     let rows = stmt.query_map([scan_id], |r| {
@@ -346,6 +384,9 @@ pub fn findings(conn: &Connection, scan_id: i64) -> rusqlite::Result<Vec<Finding
             matches: r.get(5)?,
             note: r.get(6)?,
             bytes: r.get(7)?,
+            confidence: r.get(8)?,
+            trace: r.get(9)?,
+            candidates: r.get(10)?,
         })
     })?;
     rows.collect()
@@ -374,6 +415,9 @@ mod tests {
             matches: 1,
             note: String::new(),
             bytes: None,
+            confidence: 100,
+            trace: None,
+            candidates: None,
         }
     }
 
@@ -393,6 +437,9 @@ mod tests {
             not_found: 0,
             total_matches: 1,
             scan_ms: 5,
+            module_size: 0x10_0000,
+            pattern_set_hash: "patternset".to_string(),
+            scanner_version: "0.0.0-test".to_string(),
         }
     }
 
@@ -410,6 +457,100 @@ mod tests {
         let f = findings(&conn, a).unwrap();
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].name, "Foo");
+    }
+
+    #[test]
+    fn diagnostic_columns_round_trip() {
+        let mut conn = open_memory();
+        let mut f = finding("Amb", Some("0x10"));
+        f.status = "found (ambiguous)".to_string();
+        f.confidence = 50;
+        f.trace = Some("memory pointer resolved to 0x10".to_string());
+        f.candidates = Some("0x10,0x20".to_string());
+        let id = insert_scan(&mut conn, &scan("AAAA"), &[f]).unwrap();
+        let rows = findings(&conn, id).unwrap();
+        assert_eq!(rows[0].confidence, Some(50));
+        assert_eq!(
+            rows[0].trace.as_deref(),
+            Some("memory pointer resolved to 0x10")
+        );
+        assert_eq!(rows[0].candidates.as_deref(), Some("0x10,0x20"));
+    }
+
+    #[test]
+    fn forensic_columns_round_trip() {
+        let mut conn = open_memory();
+        let mut s = scan("AAAA");
+        s.module_size = 0x2A_0000;
+        s.pattern_set_hash = "abc123".to_string();
+        s.scanner_version = "9.9.9".to_string();
+        let id = insert_scan(&mut conn, &s, &[finding("Foo", Some("0x10"))]).unwrap();
+        let (size, ph, sv): (i64, String, String) = conn
+            .query_row(
+                "SELECT module_size, pattern_set_hash, scanner_version FROM scans WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(size, 0x2A_0000);
+        assert_eq!(ph, "abc123");
+        assert_eq!(sv, "9.9.9");
+    }
+
+    #[test]
+    fn upgrades_a_v3_database_and_reads_old_rows_as_null() {
+        // A database written by the previous schema, without the v4 forensic columns, and with a row
+        // already in it. Migration must add the columns without rewriting the row, so the old scan
+        // reads back as "unknown" (NULL) rather than a fabricated value.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE scans (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               created_at INTEGER NOT NULL, module TEXT NOT NULL, module_base TEXT NOT NULL,
+               arch TEXT NOT NULL, build_hash TEXT NOT NULL, build_version TEXT,
+               build_timestamp INTEGER NOT NULL, bytes INTEGER NOT NULL, regions INTEGER NOT NULL,
+               found INTEGER NOT NULL, unresolved INTEGER NOT NULL, not_found INTEGER NOT NULL,
+               total_matches INTEGER NOT NULL, scan_ms INTEGER NOT NULL, result_hash TEXT
+             );
+             CREATE TABLE findings (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+               name TEXT NOT NULL, category TEXT NOT NULL, value TEXT, is_offset INTEGER NOT NULL,
+               status TEXT NOT NULL, matches INTEGER NOT NULL, note TEXT NOT NULL, bytes TEXT,
+               confidence INTEGER, trace TEXT, candidates TEXT
+             );
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scans (created_at, module, module_base, arch, build_hash, build_timestamp,
+                bytes, regions, found, unresolved, not_found, total_matches, scan_ms)
+             VALUES (1,'m','0x0','x64','HASH',0,0,0,0,0,0,0,0)",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let module_size: Option<i64> = conn
+            .query_row("SELECT module_size FROM scans LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(module_size, None);
+        // and a fresh insert through the normal path now populates the new columns
+        let mut conn = conn;
+        let id = insert_scan(&mut conn, &scan("BBBB"), &[finding("Foo", Some("0x10"))]).unwrap();
+        let sv: Option<String> = conn
+            .query_row(
+                "SELECT scanner_version FROM scans WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sv.as_deref(), Some("0.0.0-test"));
     }
 
     #[test]

@@ -59,14 +59,14 @@ fn canonical(result: &ScanResult) -> String {
 }
 
 const EXPECTED: &str = "\
-Amb [globals] found (ambiguous) value=0x300 offset=false matches=2
-Bar [globals] found value=0x90 offset=false matches=1
-Baz [globals] found value=0x205 offset=false matches=1
-Foo [globals] found value=0x40 offset=false matches=1
-Hdr [globals] found value=0x123 offset=true matches=1
-Missing [globals] not found value=- offset=false matches=0
-Qux [globals] found value=0x10 offset=true matches=1
-Straddle [globals] found value=0x3FFFE offset=false matches=1
+Amb [uncategorized] found (ambiguous) value=0x300 offset=false matches=2
+Bar [uncategorized] found value=0x90 offset=false matches=1
+Baz [uncategorized] found value=0x205 offset=false matches=1
+Foo [uncategorized] found value=0x40 offset=false matches=1
+Hdr [uncategorized] found value=0x123 offset=true matches=1
+Missing [uncategorized] not found value=- offset=false matches=0
+Qux [uncategorized] found value=0x10 offset=true matches=1
+Straddle [uncategorized] found value=0x3FFFE offset=false matches=1
 total_matches=8
 findings=6
 ";
@@ -83,4 +83,37 @@ fn scan_and_resolve_snapshot() {
     let result = scan(&source, BASE, SIZE, &regions, &patterns, Arch::X64);
 
     assert_eq!(canonical(&result), EXPECTED);
+}
+
+#[test]
+fn diagnostic_fields_expose_candidates_confidence_and_trace() {
+    let source = BufferSource::new(BASE, build_image());
+    let regions = [Region {
+        base: BASE,
+        size: SIZE,
+    }];
+    let patterns = parse_patterns(PATTERNS, Arch::X64);
+    let result = scan(&source, BASE, SIZE, &regions, &patterns, Arch::X64);
+    let row = |name: &str| {
+        result
+            .rows
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("missing row {name}"))
+    };
+
+    let foo = row("Foo");
+    assert_eq!(foo.candidates, vec![0x40]);
+    assert_eq!(foo.confidence, 100);
+    assert!(foo.trace.as_deref().unwrap().contains("resolved to 0x40"));
+
+    let amb = row("Amb");
+    assert_eq!(amb.candidates, vec![0x300, 0x400]);
+    assert_eq!(amb.confidence, 50);
+    assert!(amb.trace.is_some());
+
+    let missing = row("Missing");
+    assert!(missing.candidates.is_empty());
+    assert_eq!(missing.confidence, 0);
+    assert!(missing.trace.is_none());
 }

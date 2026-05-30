@@ -88,6 +88,7 @@ const driver = `
     ],
     string_anchor: "@string=UI/UIWindow2.img/Stat",
     negative_hits: [{ label: "other.dll", count: 2 }],
+    negative_summary: { modules_scanned: 4, modules_hit: 1, total_hits: 2, max_hits_per_module: 2 },
   };
   sigState.response = { jobs: [
     { label: "E8 ?? ?? ?? ?? 48 83 C4 ??", report: fakeReport, cross: null, error: null },
@@ -96,10 +97,36 @@ const driver = `
   ] };
   renderSigResults();
   globalThis.__reportHtml = document.getElementById("sig-results").innerHTML;
+  globalThis.__diagHtml = diagnosticsHtml({ confidence: "50", trace: "memory pointer resolved to 0x10", candidates: "0x10,0x20" });
+  globalThis.__confHi = confChip(95);
+  globalThis.__confLo = confChip(10);
+  globalThis.__confNone = confChip(null);
+  state.rows = [
+    { name: "Amb", category: "globals", type: "pointer", value: "0x300", is_offset: false, matches: 2, status: "found (ambiguous)", note: "", pattern: "CA FE", confidence: 50, trace: "match address resolved to 0x300", candidates: ["0x300", "0x400"] },
+  ];
+  state.report = { module_name: "MapleStory.exe", module_base: "0x140000000" };
+  selectRow("Amb");
+  globalThis.__inspDiag = document.getElementById("insp-diag").innerHTML;
+  globalThis.__fake = fakeFor("name", "SendPacket");
+  applyMask();
+  globalThis.__maskOk = true;
+  renderScanDiag({ elapsed_ms: 100, attach_ms: 30, scan_ms: 70, regions_detail: [
+    { base: "0x1000", size: 4096, findings: 3 }, { base: "0x5000", size: 2048, findings: 1 },
+  ] });
+  globalThis.__scanDiag = document.getElementById("scan-diag").innerHTML;
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
-const code = fs.readFileSync(path.join(__dirname, "frontend", "app.js"), "utf8") + driver;
+const i18nCode = fs.readFileSync(path.join(__dirname, "frontend", "i18n.js"), "utf8");
+const iconsCode = fs.readFileSync(path.join(__dirname, "frontend", "icons.js"), "utf8");
+const maskingCode = fs.readFileSync(path.join(__dirname, "frontend", "masking.js"), "utf8");
+const sigCode = fs.readFileSync(path.join(__dirname, "frontend", "sigmaker.js"), "utf8");
+const histCode = fs.readFileSync(path.join(__dirname, "frontend", "history.js"), "utf8");
+const readFront = (f) => fs.readFileSync(path.join(__dirname, "frontend", f), "utf8");
+const code =
+  i18nCode + iconsCode + maskingCode + sigCode + histCode +
+  readFront("asmscan.js") + readFront("workspace.js") + readFront("patterns.js") + readFront("editor.js") +
+  readFront("app.js") + driver;
 try {
   vm.runInNewContext(code, sandbox, { filename: "app.js" });
 } catch (e) {
@@ -129,11 +156,29 @@ check(rep.includes("matched the held-out build"), "holdout pass verdict missing"
 check(rep.includes("did not match the held-out build"), "holdout miss verdict missing");
 check(rep.includes("String anchor") && rep.includes("@string=UI/UIWindow2.img/Stat"), "string anchor suggestion missing");
 check(rep.includes("Negative corpus matches") && rep.includes("other.dll"), "negative corpus hits missing");
+check(rep.includes("1 of 4 module(s) matched") && rep.includes("2 total"), "negative corpus summary line missing");
 check(rep.includes("2 file(s)") && rep.includes("2 unique build(s)"), "input summary missing");
 check(rep.includes("sig-job-n") && rep.includes("#1") && rep.includes("#2"), "per-job framing/numbers missing");
 check(rep.includes("sig-cross-verdict ok") && rep.includes("Resolves to 0x24190 as expected"), "cross verdict missing");
 check(rep.includes("sig-job-err") && rep.includes("bad hex byte"), "job error card missing");
 check(rep.includes("Grade legend"), "grade legend missing");
+const diag = sandbox.__diagHtml || "";
+check(diag.includes("Resolver trace") && diag.includes("memory pointer resolved to 0x10"), "diagnostics trace missing");
+check(diag.includes("Candidates") && diag.includes("0x10") && diag.includes("0x20"), "diagnostics candidates missing");
+check(diag.includes("50/100"), "diagnostics confidence value missing");
+check((sandbox.__confHi || "").includes("conf-chip hi"), "high-confidence chip missing");
+check((sandbox.__confLo || "").includes("conf-chip lo"), "low-confidence chip missing");
+check(sandbox.__confNone === "", "null confidence should yield no chip");
+const inspDiag = sandbox.__inspDiag || "";
+check(inspDiag.includes("match address resolved to 0x300"), "inspector trace missing");
+check(inspDiag.includes("0x300") && inspDiag.includes("0x400"), "inspector candidate list missing");
+check(inspDiag.includes("50/100"), "inspector confidence value missing");
+check(typeof sandbox.__fake === "string" && sandbox.__fake.length > 0, "fakeFor (masking) should produce a string");
+check(sandbox.__maskOk === true, "applyMask (masking) should run without throwing");
+const scanDiag = sandbox.__scanDiag || "";
+check(scanDiag.includes("Job timeline") && scanDiag.includes("Section map"), "scan diagnostics panels missing");
+check(scanDiag.includes("0x1000") && scanDiag.includes("0x5000"), "section map regions missing");
+check(scanDiag.includes("tl-attach") && scanDiag.includes("tl-scan"), "job timeline segments missing");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");

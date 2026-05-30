@@ -1,78 +1,14 @@
-use std::collections::BTreeSet;
-
 use crate::fileimage::{RelocKind, RelocLookup};
-use crate::memory::{MemorySource, Region};
+use crate::memory::MemorySource;
 use crate::pattern::{Arch, Signature, try_signature_from_aob};
 use crate::resolver::decode_rel_target;
 use crate::scanner::{CompiledPattern, find_all};
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, OpKind, Register};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Grade {
-    A,
-    B,
-    C,
-    D,
-    F,
-}
-
-impl Grade {
-    #[must_use]
-    pub fn letter(self) -> char {
-        match self {
-            Grade::A => 'A',
-            Grade::B => 'B',
-            Grade::C => 'C',
-            Grade::D => 'D',
-            Grade::F => 'F',
-        }
-    }
-    fn rank(self) -> u8 {
-        match self {
-            Grade::A => 0,
-            Grade::B => 1,
-            Grade::C => 2,
-            Grade::D => 3,
-            Grade::F => 4,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Suffix {
-    None,
-    Call,
-    Jmp,
-    Ptr,
-}
-
-impl Suffix {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Suffix::None => "",
-            Suffix::Call => "_CALL",
-            Suffix::Jmp => "_JMP",
-            Suffix::Ptr => "_PTR",
-        }
-    }
-    fn order(self) -> u8 {
-        match self {
-            Suffix::None => 0,
-            Suffix::Call => 1,
-            Suffix::Jmp => 2,
-            Suffix::Ptr => 3,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TargetKind {
-    Code,
-    Data,
-    Import,
-    Unknown,
-}
+mod scoring;
+mod types;
+pub use scoring::{NegativeEvidence, apply_negative_corpus};
+pub use types::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Anchor {
@@ -81,213 +17,14 @@ enum Anchor {
     Ptr { rip: bool },
 }
 
-#[derive(Clone, Debug)]
-pub enum Diag {
-    NoInputs,
-    MixedArch,
-    PackedInput { label: String, reasons: Vec<String> },
-    MissingInImage { label: String },
-    AmbiguousInImage { label: String, count: usize },
-    StreamDiverges { label: String, offset: usize },
-    UnsupportedReloc { rva: usize, reloc_type: u8 },
-    InvalidAob { reason: String },
-    TooFewFixedBytes { fixed: usize },
-    LowFixedRatio { ratio: f64 },
-    NoOpcodeBytes,
-    TargetNotCode { label: String, rva: usize },
-    UnresolvableTarget { label: String },
-    CalleeMismatch,
-    NotUnique,
-    BuildFailed,
-}
-
-impl std::fmt::Display for Diag {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Diag::NoInputs => f.write_str("no inputs"),
-            Diag::MixedArch => f.write_str("inputs mix x86 and x64"),
-            Diag::PackedInput { label, reasons } => {
-                write!(f, "packed input {label}: {}", reasons.join("; "))
-            }
-            Diag::MissingInImage { label } => write!(f, "not found in {label}"),
-            Diag::AmbiguousInImage { label, count } => write!(f, "{count} matches in {label}"),
-            Diag::StreamDiverges { label, offset } => {
-                write!(f, "instruction stream diverges in {label} at +0x{offset:X}")
-            }
-            Diag::UnsupportedReloc { rva, reloc_type } => {
-                write!(f, "unsupported relocation (type {reloc_type}) at 0x{rva:X}")
-            }
-            Diag::InvalidAob { reason } => write!(f, "invalid signature: {reason}"),
-            Diag::TooFewFixedBytes { fixed } => write!(f, "too few fixed bytes ({fixed})"),
-            Diag::LowFixedRatio { ratio } => write!(f, "fixed ratio too low ({ratio:.2})"),
-            Diag::NoOpcodeBytes => f.write_str("no meaningful fixed opcode bytes"),
-            Diag::TargetNotCode { label, rva } => {
-                write!(
-                    f,
-                    "branch target 0x{rva:X} is not in executable code in {label}"
-                )
-            }
-            Diag::UnresolvableTarget { label } => {
-                write!(f, "could not resolve the branch target in {label}")
-            }
-            Diag::CalleeMismatch => {
-                f.write_str("branch target resolves to different code across builds")
-            }
-            Diag::NotUnique => f.write_str("could not make a unique signature across all builds"),
-            Diag::BuildFailed => f.write_str("build failed"),
-        }
-    }
-}
-
-pub enum TargetSpec {
-    Aob(String),
-    Ref { image: usize, rva: u64 },
-}
-
-pub struct SigOptions {
-    pub max_len: usize,
-    pub min_fixed: usize,
-    pub min_fixed_ratio: f64,
-}
-
-impl Default for SigOptions {
-    fn default() -> Self {
-        Self {
-            max_len: 80,
-            min_fixed: 5,
-            min_fixed_ratio: 0.30,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct ImageInput<'a> {
-    pub label: String,
-    pub source: &'a dyn MemorySource,
-    pub base: usize,
-    pub size: usize,
-    pub code_regions: Vec<Region>,
-    pub regions: Vec<Region>,
-    pub import: Option<(usize, usize)>,
-    pub arch: Arch,
-    pub code_hash: u64,
-    pub packed: bool,
-    pub pack_reasons: Vec<String>,
-    pub reloc: Option<&'a dyn RelocLookup>,
-}
-
-impl ImageInput<'_> {
-    fn classify(&self, abs: usize) -> TargetKind {
-        let in_region = |rs: &[Region]| rs.iter().any(|r| abs >= r.base && abs < r.base + r.size);
-        if in_region(&self.code_regions) {
-            TargetKind::Code
-        } else if self.import.is_some_and(|(s, e)| abs >= s && abs < e) {
-            TargetKind::Import
-        } else if in_region(&self.regions) {
-            TargetKind::Data
-        } else {
-            TargetKind::Unknown
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PerVersion {
-    pub label: String,
-    pub match_rva: Option<u64>,
-    pub resolved_target_rva: Option<u64>,
-    pub target_kind: Option<TargetKind>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SigCandidate {
-    pub aob: String,
-    pub suffix: Suffix,
-    pub grade: Grade,
-    pub score: u32,
-    pub bytes_len: usize,
-    pub fixed: usize,
-    pub wildcards: usize,
-    pub fixed_ratio: f64,
-    pub reloc_safe: bool,
-    pub per_version: Vec<PerVersion>,
-    pub diags: Vec<Diag>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DupGroup {
-    pub code_hash: u64,
-    pub labels: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct InputInfo {
-    pub label: String,
-    pub packed: bool,
-    pub reasons: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct NegativeHit {
-    pub label: String,
-    pub count: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct HoldoutResult {
-    pub held_out: String,
-    pub generated: bool,
-    pub matched_holdout: bool,
-}
-
-/// The reliably detectable identity of a client build: arch, pack state, code size, and code hash.
-/// A human variant label (GMS, KMS, a private fork) stays operator-supplied, not derived here.
-#[derive(Clone, Debug)]
-pub struct BuildProfile {
-    pub arch: Arch,
-    pub packed: bool,
-    pub code_bytes: usize,
-    pub code_hash: u64,
-}
-
-impl BuildProfile {
-    #[must_use]
-    pub fn of(img: &ImageInput) -> Self {
-        Self {
-            arch: img.arch,
-            packed: img.packed,
-            code_bytes: img.code_regions.iter().map(|r| r.size).sum(),
-            code_hash: img.code_hash,
-        }
-    }
-
-    /// Same lane = same arch and pack state; a cross-version comparison must not cross either.
-    #[must_use]
-    pub fn same_variant(&self, other: &Self) -> bool {
-        matches!(
-            (self.arch, other.arch),
-            (Arch::X64, Arch::X64) | (Arch::X86, Arch::X86)
-        ) && self.packed == other.packed
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SigReport {
-    pub arch: Arch,
-    pub inputs: Vec<InputInfo>,
-    pub unique_builds: usize,
-    pub duplicate_groups: Vec<DupGroup>,
-    pub chosen: Option<SigCandidate>,
-    pub alternates: Vec<SigCandidate>,
-    pub rejected: Vec<SigCandidate>,
-    pub diagnostics: Vec<Diag>,
-}
-
-fn bitness(arch: Arch) -> u32 {
+pub(super) fn bitness(arch: Arch) -> u32 {
     if matches!(arch, Arch::X64) { 64 } else { 32 }
 }
 
-fn read_region(src: &dyn MemorySource, base: usize, size: usize) -> Vec<u8> {
+// Truncate to the bytes actually read so an unreadable tail is never handed back as real zeros: a
+// short read at a region boundary or an unmapped page must shrink the slice, not fabricate data the
+// signature logic would then anchor on.
+pub(super) fn read_region(src: &dyn MemorySource, base: usize, size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; size];
     let mut off = 0;
     while off < size {
@@ -296,10 +33,11 @@ fn read_region(src: &dyn MemorySource, base: usize, size: usize) -> Vec<u8> {
             Ok(n) => off += n,
         }
     }
+    buf.truncate(off);
     buf
 }
 
-fn read_at(src: &dyn MemorySource, base: usize, rva: usize, len: usize) -> Vec<u8> {
+pub(super) fn read_at(src: &dyn MemorySource, base: usize, rva: usize, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     let mut off = 0;
     while off < len {
@@ -308,6 +46,7 @@ fn read_at(src: &dyn MemorySource, base: usize, rva: usize, len: usize) -> Vec<u
             Ok(n) => off += n,
         }
     }
+    buf.truncate(off);
     buf
 }
 
@@ -508,7 +247,7 @@ struct Located {
     anchors: Vec<(usize, u64)>, // (image index, rva) for each required, located build
 }
 
-fn mem_target(instr: &Instruction, arch: Arch) -> Option<usize> {
+pub(super) fn mem_target(instr: &Instruction, arch: Arch) -> Option<usize> {
     if !(0..instr.op_count()).any(|i| instr.op_kind(i) == OpKind::Memory) {
         return None;
     }
@@ -548,347 +287,77 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
     }
 }
 
-const ID_WINDOW: usize = 256;
-const ID_MAX_INSTRS: usize = 24;
+mod identity;
+pub use identity::*;
 
-/// Recompile-stable identity of a function entry: mnemonic stream, CFG-lite block count, distinctive
-/// constants, and referenced strings. The cross-build consistency check compares these.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FnIdentity {
-    pub instr_count: usize,
-    pub blocks: usize,
-    pub calls: usize,
-    pub branches: usize,
-    pub returns: usize,
-    pub constants: Vec<u64>,
-    pub strings: Vec<String>,
-    mnemonics: Vec<u32>,
-}
-
-fn fnv_fold(h: &mut u64, bytes: &[u8]) {
-    for &b in bytes {
-        *h ^= u64::from(b);
-        *h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-}
-
-fn is_immediate_kind(k: OpKind) -> bool {
-    matches!(
-        k,
-        OpKind::Immediate8
-            | OpKind::Immediate8_2nd
-            | OpKind::Immediate16
-            | OpKind::Immediate32
-            | OpKind::Immediate64
-            | OpKind::Immediate8to16
-            | OpKind::Immediate8to32
-            | OpKind::Immediate8to64
-            | OpKind::Immediate32to64
-    )
-}
-
-fn in_image(img: &ImageInput, v: u64) -> bool {
-    (img.base as u64..(img.base + img.size) as u64).contains(&v)
-}
-
-// Tuned: below this, an immediate is a stack or struct offset, not an identifying magic number.
-fn is_distinctive_const(v: u64) -> bool {
-    (v as i64).unsigned_abs() > 0xFFFF && v != u64::MAX
-}
-
-fn read_string_ref(img: &ImageInput, abs: usize) -> Option<String> {
-    let rva = abs.checked_sub(img.base).filter(|&r| r < img.size)?;
-    let bytes = read_at(img.source, img.base, rva, 64);
-    let printable = |b: u8| (0x20..=0x7E).contains(&b);
-    let ascii: String = bytes
-        .iter()
-        .copied()
-        .take_while(|&b| printable(b))
-        .map(char::from)
-        .take(48)
-        .collect();
-    if ascii.len() >= 4 {
-        return Some(ascii);
-    }
-    let wide: String = bytes
-        .chunks_exact(2)
-        .take_while(|c| c[1] == 0 && printable(c[0]))
-        .map(|c| char::from(c[0]))
-        .take(48)
-        .collect();
-    (wide.len() >= 4).then_some(wide)
-}
-
-#[must_use]
-pub fn fn_identity(img: &ImageInput, target_rva: usize) -> FnIdentity {
-    let bytes = read_at(img.source, img.base, target_rva, ID_WINDOW);
-    let ip0 = (img.base + target_rva) as u64;
-    let end_ip = ip0 + bytes.len() as u64;
-    let mut decoder = Decoder::with_ip(bitness(img.arch), &bytes, ip0, DecoderOptions::NONE);
-    let mut instr = Instruction::default();
-    let mut mnemonics: Vec<u32> = Vec::new();
-    let mut constants: Vec<u64> = Vec::new();
-    let mut strings: Vec<String> = Vec::new();
-    let mut blocks: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
-    let (mut calls, mut branches, mut returns) = (0usize, 0usize, 0usize);
-    blocks.insert(ip0);
-    while decoder.can_decode() && mnemonics.len() < ID_MAX_INSTRS {
-        decoder.decode_out(&mut instr);
-        if instr.is_invalid() || instr.len() == 0 {
-            break;
-        }
-        mnemonics.push(instr.mnemonic() as u32);
-        let immediates = (0..instr.op_count())
-            .filter(|&i| is_immediate_kind(instr.op_kind(i)))
-            .map(|i| instr.immediate(i));
-        let refs = immediates.chain(mem_target(&instr, img.arch).map(|a| a as u64));
-        for v in refs {
-            if let Some(s) = read_string_ref(img, v as usize) {
-                strings.push(s);
-            } else if !in_image(img, v) && is_distinctive_const(v) {
-                constants.push(v);
-            }
-        }
-        match instr.flow_control() {
-            FlowControl::Call | FlowControl::IndirectCall => calls += 1,
-            FlowControl::ConditionalBranch => {
-                branches += 1;
-                let t = instr.near_branch_target();
-                if (ip0..end_ip).contains(&t) {
-                    blocks.insert(t);
-                }
-                blocks.insert(instr.next_ip());
-            }
-            FlowControl::UnconditionalBranch => {
-                branches += 1;
-                let t = instr.near_branch_target();
-                if (ip0..end_ip).contains(&t) {
-                    blocks.insert(t);
-                }
-            }
-            FlowControl::Return => {
-                returns += 1;
-                break;
-            }
-            _ => {}
-        }
-    }
-    constants.sort_unstable();
-    constants.dedup();
-    strings.sort();
-    strings.dedup();
-    FnIdentity {
-        instr_count: mnemonics.len(),
-        blocks: blocks.len(),
-        calls,
-        branches,
-        returns,
-        constants,
-        strings,
-        mnemonics,
-    }
-}
-
-impl FnIdentity {
-    #[must_use]
-    pub fn fingerprint(&self) -> String {
-        let mut h = 0xcbf2_9ce4_8422_2325u64;
-        for m in &self.mnemonics {
-            fnv_fold(&mut h, &m.to_le_bytes());
-        }
-        for c in &self.constants {
-            fnv_fold(&mut h, &c.to_le_bytes());
-        }
-        for s in &self.strings {
-            fnv_fold(&mut h, s.as_bytes());
-            fnv_fold(&mut h, &[0]);
-        }
-        format!(
-            "{}:{:016X}:b{}c{}j{}r{}",
-            self.instr_count, h, self.blocks, self.calls, self.branches, self.returns
-        )
-    }
-}
-
-fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
-    fn_identity(img, target_rva).fingerprint()
-}
-
-/// Approximate references to `target_rva`: rel32 call/jmp and x64 rip-relative lea landing on the
-/// entry. A byte scan, so it can miscount at a boundary; kept out of the fingerprint since the
-/// referencing code shifts per build, but a useful "hot function" signal on its own.
-#[must_use]
-pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
-    let target = (img.base + target_rva) as i64;
-    let rel32 = |w: &[u8]| i32::from_le_bytes([w[0], w[1], w[2], w[3]]) as i64;
-    let x64 = matches!(img.arch, Arch::X64);
-    img.code_regions
-        .iter()
-        .map(|region| {
-            let bytes = read_region(img.source, region.base, region.size);
-            let calls = bytes
-                .windows(5)
-                .enumerate()
-                .filter(|(i, w)| {
-                    matches!(w[0], 0xE8 | 0xE9)
-                        && (region.base + i + 5) as i64 + rel32(&w[1..]) == target
-                })
-                .count();
-            let leas = bytes
-                .windows(7)
-                .enumerate()
-                .filter(|(j, w)| {
-                    x64 && w[0] == 0x48
-                        && w[1] == 0x8D
-                        && w[2] & 0xC7 == 0x05
-                        && (region.base + j + 7) as i64 + rel32(&w[3..]) == target
-                })
-                .count();
-            calls + leas
-        })
-        .sum()
-}
-
-pub use crate::domain::StringAnchor;
-
-fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
-    let ascii = text.as_bytes();
-    let utf16: Vec<u8> = ascii.iter().flat_map(|&b| [b, 0]).collect();
-    img.regions.iter().find_map(|r| {
-        let bytes = read_region(img.source, r.base, r.size);
-        [ascii, &utf16]
-            .into_iter()
-            .find_map(|needle| bytes.windows(needle.len()).position(|w| w == needle))
-            .map(|pos| r.base + pos)
-    })
-}
-
-fn string_ref_sites(bytes: &[u8], base: usize, data_abs: usize, arch: Arch) -> Vec<usize> {
-    match arch {
-        Arch::X86 => {
-            let key = (data_abs as u32).to_le_bytes();
-            bytes
-                .windows(4)
-                .enumerate()
-                .filter(|(_, w)| *w == key)
-                .map(|(i, _)| base + i)
-                .collect()
-        }
-        Arch::X64 => bytes
-            .windows(7)
-            .enumerate()
-            .filter_map(|(i, w)| {
-                let lea = w[0] & 0xFB == 0x48 && w[1] == 0x8D && w[2] & 0xC7 == 0x05;
-                let disp = i32::from_le_bytes([w[3], w[4], w[5], w[6]]) as i64;
-                (lea && (base + i + 7) as i64 + disp == data_abs as i64).then_some(base + i)
-            })
-            .collect(),
-    }
-}
-
-fn xref_sites(img: &ImageInput, data_abs: usize) -> Vec<usize> {
-    img.code_regions
-        .iter()
-        .flat_map(|region| {
-            let bytes = read_region(img.source, region.base, region.size);
-            string_ref_sites(&bytes, region.base, data_abs, img.arch)
-        })
-        .collect()
-}
-
-// Walk back to the nearest standard x86 frame prologue so an anchor resolves to the function entry,
-// not the mid-body reference. This also collapses several references inside one function to a single
-// site. x64 prologues vary too much to pin this way, so there the reference site stands.
-fn enclosing_function(img: &ImageInput, site_rva: usize) -> usize {
-    if !matches!(img.arch, Arch::X86) {
-        return site_rva;
-    }
-    let start = site_rva.saturating_sub(1024);
-    let bytes = read_at(img.source, img.base, start, site_rva - start + 3);
-    bytes
-        .windows(3)
-        .enumerate()
-        .rev()
-        .find(|(_, w)| *w == [0x55, 0x8B, 0xEC])
-        .map_or(site_rva, |(i, _)| start + i)
-}
-
-fn functions_referencing(img: &ImageInput, text: &str) -> Option<BTreeSet<usize>> {
-    let data_abs = find_string_in_data(img, text)?;
-    let set: BTreeSet<usize> = xref_sites(img, data_abs)
-        .into_iter()
-        .map(|site| enclosing_function(img, site - img.base))
-        .collect();
-    (!set.is_empty()).then_some(set)
-}
-
-fn only(set: BTreeSet<usize>) -> Option<usize> {
-    let mut it = set.into_iter();
-    it.next().filter(|_| it.next().is_none())
-}
-
-#[must_use]
-pub fn resolve_string_anchor(img: &ImageInput, anchor: &StringAnchor) -> Option<usize> {
-    let primary = functions_referencing(img, &anchor.text)?;
-    match &anchor.also {
-        None => only(primary),
-        Some(second) => {
-            let secondary = functions_referencing(img, second)?;
-            only(primary.intersection(&secondary).copied().collect())
-        }
-    }
-}
-
-/// Build a string anchor for the function at `target_rva`. Prefers a single string that already pins
-/// down one enclosing function (longest first); failing that, a pair whose referencing sets intersect
-/// to exactly that function. Returns `None` if its strings cannot isolate it.
-#[must_use]
-pub fn make_string_anchor(img: &ImageInput, target_rva: usize) -> Option<StringAnchor> {
-    let mut strings = fn_identity(img, target_rva).strings;
-    strings.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    strings.truncate(6);
-    let sets: Vec<(String, BTreeSet<usize>)> = strings
-        .into_iter()
-        .filter_map(|s| functions_referencing(img, &s).map(|f| (s, f)))
-        .collect();
-
-    if let Some((text, _)) = sets.iter().find(|(_, f)| f.len() == 1) {
-        return Some(StringAnchor {
-            text: text.clone(),
-            also: None,
+fn string_anchor_candidate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+) -> Option<SigCandidate> {
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let anchor = make_string_anchor(&images[ref_idx], entry)?;
+    // Validate: the string must exist and resolve to exactly one enclosing function in every required
+    // build (resolve_string_anchor returns None otherwise), and we capture each resolved function's
+    // identity so cross-build consistency becomes evidence, not an assumption.
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut idents: Vec<FnIdentity> = Vec::new();
+    for &idx in required {
+        let resolved = resolve_string_anchor(&images[idx], &anchor)? as u64;
+        idents.push(fn_identity(&images[idx], resolved as usize));
+        per_version.push(PerVersion {
+            label: images[idx].label.clone(),
+            match_rva: Some(resolved),
+            resolved_target_rva: Some(resolved),
+            target_kind: Some(TargetKind::Code),
+            fingerprint_similarity: None,
         });
     }
-    for (i, (a, fa)) in sets.iter().enumerate() {
-        for (b, fb) in &sets[i + 1..] {
-            if fa.intersection(fb).count() == 1 {
-                return Some(StringAnchor {
-                    text: a.clone(),
-                    also: Some(b.clone()),
-                });
-            }
-        }
+    for k in 1..idents.len() {
+        per_version[k].fingerprint_similarity = Some(idents[0].similarity(&idents[k]));
     }
-    None
-}
 
-// A 0-100 confidence derived from the grade band and refined by signature density and the
-// corroborating signals, so the UI and sorting have a number, not only a letter.
-fn confidence_score(grade: Grade, fixed_ratio: f64, reloc_safe: bool, fp_consistent: bool) -> u32 {
-    let base = match grade {
-        Grade::A => 80.0,
-        Grade::B => 62.0,
-        Grade::C => 42.0,
-        Grade::D => 25.0,
-        Grade::F => return 0,
+    let aob = match &anchor.also {
+        Some(also) => format!("@string={} @also={also}", anchor.text),
+        None => format!("@string={}", anchor.text),
     };
-    let mut s = base + fixed_ratio.clamp(0.0, 1.0) * 12.0;
-    if reloc_safe {
-        s += 3.0;
+    // Score from string-anchor evidence, not from the string's bytes as code-byte entropy: presence
+    // and unique resolution in every build, how specifically the string pins the function, cross-build
+    // callee similarity, and a reference xref count. The string text is never fed in as fixed code
+    // bytes, so its characters cannot be mistaken for opcode entropy or fixed-byte density.
+    let ref_entry = resolve_string_anchor(&images[ref_idx], &anchor).unwrap_or(entry);
+    let ev = scoring::StringEvidence {
+        builds: required.len(),
+        text_len: anchor.text.chars().count(),
+        paired: anchor.also.is_some(),
+        xrefs: identity::xref_count(&images[ref_idx], ref_entry),
+        callee_similarity: scoring::callee_similarity(&idents),
+        ref_ident: idents.first().cloned(),
+    };
+    let (scores, mut reasons) = scoring::score_string_anchor(&ev);
+    let mut grade = scoring::grade_from(scores.final_score, false, false);
+    // A string anchor only earns A when it is validated across more than one build; a single build
+    // gives no cross-version evidence, so cap it at B and say so.
+    if required.len() < 2 && grade == Grade::A {
+        grade = Grade::B;
+        reasons.push("string anchor validated against only one build; capped below A".to_string());
     }
-    if fp_consistent {
-        s += 3.0;
-    }
-    s.round().min(100.0) as u32
+    Some(SigCandidate {
+        aob,
+        suffix: Suffix::None,
+        grade,
+        score: scores.final_score,
+        bytes_len: anchor.text.len(),
+        fixed: anchor.text.len(),
+        wildcards: 0,
+        fixed_ratio: 1.0,
+        reloc_safe: true,
+        scores,
+        reasons,
+        per_version,
+        diags: Vec::new(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -942,7 +411,10 @@ fn finalize(
     let mut all_code = true;
     let mut any_unresolved = false;
     let mut kinds: Vec<TargetKind> = Vec::new();
-    let mut fingerprints: Vec<String> = Vec::new();
+    // Callee identities for code targets, with the per_version row each belongs to, so cross-build
+    // fingerprint similarity can be filled in after the per-build pass.
+    let mut idents: Vec<FnIdentity> = Vec::new();
+    let mut ident_pv: Vec<usize> = Vec::new();
     for &(idx, _) in &located.anchors {
         let img = &images[idx];
         let (count, rva) = cache_of(idx).locate(&pat);
@@ -962,7 +434,8 @@ fn finalize(
                             target_kind = Some(kind);
                             kinds.push(kind);
                             if kind == TargetKind::Code {
-                                fingerprints.push(callee_fingerprint(img, target_rva));
+                                idents.push(fn_identity(img, target_rva));
+                                ident_pv.push(per_version.len());
                             } else {
                                 all_code = false;
                                 if matches!(anchor, Anchor::Branch) {
@@ -996,11 +469,19 @@ fn finalize(
             match_rva: rva,
             resolved_target_rva,
             target_kind,
+            fingerprint_similarity: None,
         });
     }
 
     if !unique_all {
         return None; // not unique here; the caller will grow the window
+    }
+
+    // Fill in each code target's callee similarity to the first build's, as per-build evidence.
+    for (k, ident) in idents.iter().enumerate() {
+        if k > 0 {
+            per_version[ident_pv[k]].fingerprint_similarity = Some(idents[0].similarity(ident));
+        }
     }
 
     let mut diags: Vec<Diag> = diags_in.to_vec();
@@ -1026,44 +507,59 @@ fn finalize(
     }
     let reloc_safe = unsupported.is_none();
 
-    let fp_consistent = fingerprints.windows(2).all(|w| w[0] == w[1]);
+    // Cross-build callee agreement as a graceful numeric similarity, not fingerprint equality: a
+    // callee that gained or shifted an instruction across a recompile stays high. The hard mismatch
+    // diagnostic only fires on a genuine divergence (the Low band), not on that small drift.
+    let callee_similarity = scoring::callee_similarity(&idents);
     let kinds_consistent = kinds.windows(2).all(|w| w[0] == w[1]);
-    if is_anchor && !any_unresolved && !fp_consistent {
+    if is_anchor && !any_unresolved && callee_similarity.is_some_and(scoring::is_callee_divergence)
+    {
         diags.push(Diag::CalleeMismatch);
     }
-    // Grade A needs a content-validated anchor: a branch or RIP-relative ref whose target is code
-    // with matching callee fingerprints in every build. A stable data/import ref resolves but its
-    // content is unchecked, so it caps at B; absolute refs and any cross-build mismatch fall to C.
-    let grade = if gated {
-        Grade::F
-    } else if any_packed {
-        Grade::D
-    } else if !reloc_safe {
-        Grade::C
-    } else {
-        match anchor {
-            Anchor::Direct => Grade::B,
-            Anchor::Branch => {
-                if all_code && !any_unresolved && fp_consistent {
-                    Grade::A
-                } else {
-                    Grade::C
-                }
-            }
-            Anchor::Ptr { rip }
-                if rip && !any_unresolved && kinds_consistent && !kinds.is_empty() =>
-            {
-                match kinds[0] {
-                    TargetKind::Code if fp_consistent => Grade::A,
-                    TargetKind::Data | TargetKind::Import => Grade::B,
-                    _ => Grade::C, // code with mismatched callees, or unknown region
-                }
-            }
-            Anchor::Ptr { .. } => Grade::C, // absolute, unresolved, or kind-inconsistent
-        }
-    };
 
-    let score = confidence_score(grade, ratio, reloc_safe, fp_consistent);
+    // The grade is derived from the independent sub-scores (see `scoring`), not the other way round.
+    // A content-validated anchor (branch / RIP-relative ref to code with a consistent callee) scores
+    // into the A band; a stable data ref is B; an absolute, unresolved, or kind-inconsistent ref is
+    // weaker. Hard gates force F and a packed input caps at D regardless of score.
+    let anchor_kind = match anchor {
+        Anchor::Direct => scoring::AnchorKind::Direct,
+        Anchor::Branch => scoring::AnchorKind::Branch,
+        Anchor::Ptr { rip: true } => scoring::AnchorKind::RipPtr,
+        Anchor::Ptr { rip: false } => scoring::AnchorKind::AbsPtr,
+    };
+    let fixed_bytes: Vec<u8> = (0..len).filter(|&k| fixed[k]).map(|k| bytes[k]).collect();
+    let operand_masked = (0..len)
+        .filter(|&k| operand.get(k).copied().unwrap_or(false) && !fixed[k])
+        .count();
+    let initial_fixed = base_fixed.iter().filter(|&&f| f).count();
+    let byte_survival = if initial_fixed == 0 {
+        1.0
+    } else {
+        fixed_n as f64 / initial_fixed as f64
+    };
+    let ev = scoring::Evidence {
+        anchor: anchor_kind,
+        is_anchor,
+        all_code,
+        any_unresolved,
+        callee_similarity,
+        kinds_consistent,
+        first_kind: kinds.first().copied(),
+        reloc_safe,
+        packed: any_packed,
+        fixed_bytes,
+        fixed_n,
+        len,
+        meaningful,
+        operand_masked,
+        builds: located.anchors.len(),
+        ref_ident: idents.first(),
+        byte_survival,
+    };
+    let (scores, reasons) = scoring::score(&ev);
+    let grade = scoring::grade_from(scores.final_score, gated, any_packed);
+    let score = scores.final_score;
+
     let aob = aob_of(&bytes, &fixed);
     bytes.truncate(len);
     Some(SigCandidate {
@@ -1076,6 +572,8 @@ fn finalize(
         wildcards: wild_n,
         fixed_ratio: ratio,
         reloc_safe,
+        scores,
+        reasons,
         per_version,
         diags,
     })
@@ -1368,6 +866,7 @@ pub fn generate_with_progress(
     let cache_of = |idx: usize| &caches.iter().find(|(i, _)| *i == idx).unwrap().1;
 
     progress(SigStage::LocatingTarget);
+    let mut aob_found: Vec<(usize, u64)> = Vec::new();
     let (ref_idx, ref_rva, _seed_len, seed_mask): (usize, u64, usize, Option<Vec<bool>>) =
         match spec {
             TargetSpec::Aob(aob) => {
@@ -1384,11 +883,10 @@ pub fn generate_with_progress(
                     });
                     return fail(diagnostics, unique_builds, dup_groups);
                 };
-                let mut chosen_ref = None;
                 for &idx in &required {
                     let (count, rva) = cache_of(idx).locate(&pat);
                     match (count, rva) {
-                        (1, Some(r)) if chosen_ref.is_none() => chosen_ref = Some((idx, r)),
+                        (1, Some(r)) => aob_found.push((idx, r)),
                         (0, _) => diagnostics.push(Diag::MissingInImage {
                             label: images[idx].label.clone(),
                         }),
@@ -1399,7 +897,7 @@ pub fn generate_with_progress(
                         _ => {}
                     }
                 }
-                let Some((idx, r)) = chosen_ref else {
+                let Some(&(idx, r)) = aob_found.first() else {
                     return fail(diagnostics, unique_builds, dup_groups);
                 };
                 (idx, r, sig.bytes.len(), Some(sig.mask))
@@ -1491,6 +989,11 @@ pub fn generate_with_progress(
     }
 
     progress(SigStage::Scoring);
+    if pool.is_empty()
+        && let Some(anchor_cand) = string_anchor_candidate(images, &required, ref_idx, ref_rva)
+    {
+        pool.push(anchor_cand);
+    }
     // confidence first, then fewest wildcards / shortest / kind / AOB text, so the same inputs
     // always pick the same winner
     pool.sort_by(|a, b| {
@@ -1512,6 +1015,12 @@ pub fn generate_with_progress(
     let chosen = (!pool.is_empty()).then(|| pool.remove(0));
     let alternates = pool;
     if chosen.is_none() {
+        for &(idx, rva) in &aob_found {
+            diagnostics.push(Diag::FoundInBuild {
+                label: images[idx].label.clone(),
+                rva,
+            });
+        }
         diagnostics.push(Diag::NotUnique);
     }
 
@@ -1579,20 +1088,73 @@ pub fn generate_cross(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::BufferSource;
+    use crate::memory::{BufferSource, Region};
 
     #[test]
-    fn confidence_score_tracks_grade_and_signals() {
-        assert_eq!(confidence_score(Grade::F, 0.9, true, true), 0);
-        assert!(
-            confidence_score(Grade::A, 0.5, true, true)
-                > confidence_score(Grade::B, 0.5, true, true)
+    fn score_and_grade_agree_on_a_validated_candidate() {
+        // A validated _CALL to code: its grade is read off final_score, the sub-scores are exposed,
+        // and the backward-compatible `score` field mirrors final_score.
+        let mut data = vec![0x48, 0x89, 0xE5, 0xC3];
+        data.resize(0x20, 0x90);
+        data.extend_from_slice(&[0xE8, 0xDB, 0xFF, 0xFF, 0xFF]);
+        data.extend_from_slice(&[0x0F, 0xB6, 0xC0, 0x33, 0xC9]);
+        data.resize(0x40, 0x90);
+        let src = BufferSource::new(0x1000, data);
+        let report = generate(
+            &[img("a", &src, 0x1000, 0x40)],
+            &TargetSpec::Ref { image: 0, rva: 0 },
+            &SigOptions::default(),
         );
-        assert!(
-            confidence_score(Grade::A, 0.5, true, true)
-                > confidence_score(Grade::A, 0.5, false, false)
+        let cand = report.chosen.expect("a candidate");
+        assert_eq!(cand.grade, Grade::A);
+        assert_eq!(cand.score, cand.scores.final_score);
+        assert!(cand.scores.final_score >= 82);
+        assert_eq!(
+            Grade::from_final_score(cand.scores.final_score),
+            Grade::A,
+            "grade must be the band of final_score"
         );
-        assert!(confidence_score(Grade::A, 1.0, true, true) <= 100);
+        assert!(cand.scores.resolver_confidence >= 90);
+        assert!(!cand.reasons.is_empty());
+    }
+
+    struct ShortSource {
+        base: usize,
+        readable: usize,
+    }
+
+    impl MemorySource for ShortSource {
+        fn read_into(&self, address: usize, buf: &mut [u8]) -> std::io::Result<usize> {
+            let off = address - self.base;
+            if off >= self.readable {
+                return Ok(0);
+            }
+            let n = buf.len().min(self.readable - off);
+            buf[..n].fill(0xCC);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn reads_drop_the_unreadable_tail_instead_of_zero_filling() {
+        let src = ShortSource {
+            base: 0x4000,
+            readable: 7,
+        };
+        let region = read_region(&src, 0x4000, 64);
+        assert_eq!(
+            region.len(),
+            7,
+            "tail past the readable range must be dropped"
+        );
+        assert!(region.iter().all(|&b| b == 0xCC));
+
+        let at = read_at(&src, 0x4000, 0, 64);
+        assert_eq!(at.len(), 7);
+        assert!(at.iter().all(|&b| b == 0xCC));
+
+        let none = read_at(&src, 0x4000, 7, 16);
+        assert!(none.is_empty(), "a read starting past the range is empty");
     }
 
     #[test]
@@ -1601,9 +1163,9 @@ mod tests {
         let a = BufferSource::new(base, vec![0x48, 0x89, 0xD8, 0xC3]); // mov rax, rbx ; ret
         let b = BufferSource::new(base, vec![0x48, 0x89, 0xD1, 0xC3]); // mov rcx, rdx ; ret
         let c = BufferSource::new(base, vec![0x48, 0x01, 0xD8, 0xC3]); // add rax, rbx ; ret
-        let fa = callee_fingerprint(&img("a", &a, base, 4), 0);
-        let fb = callee_fingerprint(&img("b", &b, base, 4), 0);
-        let fc = callee_fingerprint(&img("c", &c, base, 4), 0);
+        let fa = fn_identity(&img("a", &a, base, 4), 0).fingerprint();
+        let fb = fn_identity(&img("b", &b, base, 4), 0).fingerprint();
+        let fc = fn_identity(&img("c", &c, base, 4), 0).fingerprint();
         assert_eq!(fa, fb, "register allocation must not change the identity");
         assert_ne!(
             fa, fc,
@@ -1929,6 +1491,170 @@ mod tests {
         let anchor = make_string_anchor(&input, 0x103).expect("a paired anchor");
         assert!(anchor.also.is_some());
         assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x100));
+    }
+
+    #[test]
+    fn string_anchor_fallback_when_byte_aob_only_matches_one_build() {
+        // Both builds hold the same function: an x86 prologue that pushes the address of a shared,
+        // distinctive string. Their tails differ, so a byte AOB taken from the first build cannot be
+        // made unique across both, and generation must fall back to the recompile-stable string
+        // anchor instead of giving up.
+        let build = |hash: u64, tail: [u8; 5]| {
+            let mut mem = vec![0u8; 0x200];
+            mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+            mem[0x100..0x103].copy_from_slice(&[0x55, 0x8B, 0xEC]); // push ebp ; mov ebp, esp
+            mem[0x103] = 0x68; // push imm32 of the string address
+            mem[0x104..0x108].copy_from_slice(&0x1010u32.to_le_bytes());
+            mem[0x108..0x10D].copy_from_slice(&tail);
+            (BufferSource::new(0x1000, mem), hash)
+        };
+        // the tails differ in the opcode byte, not just an immediate, so operand-masking the seed
+        // AOB cannot reconcile the two builds and the byte path is forced to give up.
+        let (a_src, a_hash) = build(1, [0xB8, 0xEF, 0xBE, 0xAD, 0xDE]); // mov eax, 0xDEADBEEF
+        let (b_src, b_hash) = build(2, [0xB9, 0x11, 0x22, 0x33, 0x44]); // mov ecx, 0x44332211
+        fn make_input<'a>(label: &str, src: &'a BufferSource, hash: u64) -> ImageInput<'a> {
+            ImageInput {
+                label: label.to_string(),
+                source: src,
+                base: 0x1000,
+                size: 0x200,
+                code_regions: vec![Region {
+                    base: 0x1100,
+                    size: 0x100,
+                }],
+                regions: vec![
+                    Region {
+                        base: 0x1000,
+                        size: 0x100,
+                    },
+                    Region {
+                        base: 0x1100,
+                        size: 0x100,
+                    },
+                ],
+                import: None,
+                arch: Arch::X86,
+                code_hash: hash,
+                packed: false,
+                pack_reasons: Vec::new(),
+                reloc: None,
+            }
+        }
+        let images = [
+            make_input("a", &a_src, a_hash),
+            make_input("b", &b_src, b_hash),
+        ];
+        // matches only build a: the DEADBEEF tail does not exist in build b
+        let aob = "55 8B EC 68 10 10 00 00 B8 EF BE AD DE";
+        let report = generate(
+            &images,
+            &TargetSpec::Aob(aob.to_string()),
+            &SigOptions::default(),
+        );
+        let cand = report.chosen.expect("a string-anchor fallback candidate");
+        assert!(
+            cand.aob.starts_with("@string="),
+            "expected a string anchor, got {}",
+            cand.aob
+        );
+        assert_eq!(cand.aob, "@string=MapleStory");
+        assert_eq!(cand.per_version.len(), 2);
+        assert!(
+            cand.per_version
+                .iter()
+                .all(|p| p.resolved_target_rva == Some(0x100))
+        );
+    }
+
+    // A single x86 build holding "MapleStory" and a function that references it.
+    fn string_build() -> BufferSource {
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        mem[0x100..0x103].copy_from_slice(&[0x55, 0x8B, 0xEC]); // push ebp ; mov ebp,esp
+        mem[0x103] = 0x68; // push imm32 of the string address
+        mem[0x104..0x108].copy_from_slice(&0x1010u32.to_le_bytes());
+        mem[0x108] = 0xC3; // ret
+        BufferSource::new(0x1000, mem)
+    }
+
+    fn string_img(src: &BufferSource, hash: u64) -> ImageInput<'_> {
+        ImageInput {
+            label: "a".to_string(),
+            source: src,
+            base: 0x1000,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: 0x1100,
+                size: 0x100,
+            }],
+            regions: vec![
+                Region {
+                    base: 0x1000,
+                    size: 0x100,
+                },
+                Region {
+                    base: 0x1100,
+                    size: 0x100,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: hash,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        }
+    }
+
+    #[test]
+    fn string_anchor_single_build_is_capped_below_a() {
+        // Validated against only one build, a string anchor cannot earn A: there is no cross-version
+        // evidence, so it is capped and the reason is recorded.
+        let src = string_build();
+        let img = string_img(&src, 1);
+        let cand = string_anchor_candidate(&[img], &[0], 0, 0x100).expect("a string anchor");
+        assert!(cand.aob.starts_with("@string="));
+        assert_ne!(cand.grade, Grade::A);
+        assert!(cand.reasons.iter().any(|r| r.contains("one build")));
+    }
+
+    #[test]
+    fn string_anchor_consistent_across_builds_earns_a() {
+        // Two builds whose referenced function is byte-identical: the anchor resolves consistently in
+        // both, so it earns A and carries per-build similarity evidence.
+        let a = string_build();
+        let b = string_build();
+        let cand =
+            string_anchor_candidate(&[string_img(&a, 1), string_img(&b, 2)], &[0, 1], 0, 0x100)
+                .expect("a string anchor");
+        assert_eq!(cand.grade, Grade::A);
+        assert_eq!(cand.per_version.len(), 2);
+        assert_eq!(cand.per_version[1].fingerprint_similarity, Some(1.0));
+        assert!(cand.scores.cross_build >= 95);
+    }
+
+    #[test]
+    fn fingerprint_similarity_survives_a_volatile_immediate() {
+        // The same function differing only in a non-distinctive immediate keeps identity 1.0 (the kind
+        // of operand byte a signature masks must not perturb the fingerprint); a changed mnemonic
+        // stream drops it below 1.
+        let a = BufferSource::new(
+            0x2000,
+            vec![0x48, 0x89, 0xE5, 0xB8, 0x10, 0x00, 0x00, 0x00, 0xC3],
+        );
+        let b = BufferSource::new(
+            0x2000,
+            vec![0x48, 0x89, 0xE5, 0xB8, 0x20, 0x00, 0x00, 0x00, 0xC3],
+        );
+        let ia = fn_identity(&img("a", &a, 0x2000, 9), 0);
+        let ib = fn_identity(&img("b", &b, 0x2000, 9), 0);
+        assert!((ia.similarity(&ib) - 1.0).abs() < 1e-9);
+        let c = BufferSource::new(
+            0x2000,
+            vec![0x48, 0x01, 0xE5, 0xB8, 0x10, 0x00, 0x00, 0x00, 0xC3],
+        );
+        let ic = fn_identity(&img("c", &c, 0x2000, 9), 0);
+        assert!(ia.similarity(&ic) < 1.0);
     }
 
     #[test]

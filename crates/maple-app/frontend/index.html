@@ -182,12 +182,15 @@
                       <div class="insp-label" data-i18n="insp.notes">Notes</div>
                       <div id="insp-note" class="note-box d-note"></div>
                     </div>
+                    <div id="insp-diag"></div>
                   </div>
                   <div class="insp-foot">
                     <button id="insp-copy" class="btn btn-soft full" disabled><span class="ico" data-icon="copy"></span><span data-i18n="insp.copyAddress">Copy address</span></button>
                   </div>
                 </aside>
               </div>
+
+              <div id="scan-diag" class="scan-diag" hidden></div>
 
               <footer class="work-foot">
                 <div class="foot-progress">
@@ -336,9 +339,11 @@
                   <button id="hist-refresh" class="btn btn-soft"><span class="ico" data-icon="activity"></span><span data-i18n="hist.refresh">Refresh</span></button>
                   <button id="hist-compare" class="btn btn-soft" disabled><span class="ico" data-icon="diff"></span><span data-i18n="hist.compare">Compare A ↔ B</span></button>
                   <button id="hist-matrix" class="btn btn-soft"><span class="ico" data-icon="grid"></span><span data-i18n="hist.matrix">Matrix</span></button>
+                  <button id="hist-difffiles" class="btn btn-soft"><span class="ico" data-icon="diff"></span><span data-i18n="hist.diffFiles">Diff files</span></button>
                   <button id="hist-clear" class="btn btn-soft" data-i18n="hist.clear">Clear all</button>
                 </div>
               </div>
+              <input type="file" id="diff-file-input" accept=".txt,.csv,.log,text/plain" multiple hidden />
               <div id="hist-pins" class="hist-pins"></div>
               <div class="hist-grid">
                 <div class="panel table-scroll" id="hist-list"></div>
@@ -435,6 +440,15 @@
     <div id="toast" class="toast" hidden></div>
     <div id="ctx-menu" class="ctx-menu" hidden></div>
 
+    <script src="i18n.js"></script>
+    <script src="icons.js"></script>
+    <script src="masking.js"></script>
+    <script src="sigmaker.js"></script>
+    <script src="history.js"></script>
+    <script src="asmscan.js"></script>
+    <script src="workspace.js"></script>
+    <script src="patterns.js"></script>
+    <script src="editor.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
