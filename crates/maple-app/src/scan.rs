@@ -47,6 +47,9 @@ pub struct RowView {
     status: String,
     note: String,
     pattern: String,
+    confidence: u8,
+    trace: Option<String>,
+    candidates: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -206,6 +209,9 @@ fn run_scan(
                 status: r.status.label().to_string(),
                 note: r.note.clone(),
                 pattern: r.pattern.clone(),
+                confidence: r.confidence,
+                trace: r.trace.clone(),
+                candidates: r.candidates.iter().map(|v| format!("0x{v:X}")).collect(),
             }
         })
         .collect();

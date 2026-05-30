@@ -1150,6 +1150,12 @@ function selectRow(name) {
   $("insp-hits").textContent = `${row.matches}`;
   $("insp-note").textContent = row.note || t("insp.noNotes");
 
+  $("insp-diag").innerHTML = diagnosticsHtml({
+    confidence: row.confidence,
+    trace: row.trace || "",
+    candidates: row.candidates && row.candidates.length > 1 ? row.candidates.join(",") : "",
+  });
+
   const copy = $("insp-copy");
   copy.disabled = !row.value;
   copy.onclick = async () => {
@@ -1762,10 +1768,10 @@ function diagnosticsHtml(ds) {
     );
   }
   if (ds.trace)
-    parts.push(`<div class="diag-row"><span class="diag-k">${t("diag.trace")}</span><span class="diag-v mono">${esc(ds.trace)}</span></div>`);
+    parts.push(`<div class="diag-row"><span class="diag-k">${t("diag.trace")}</span><span class="diag-v mono d-addr">${esc(ds.trace)}</span></div>`);
   if (ds.candidates)
     parts.push(
-      `<div class="diag-row"><span class="diag-k">${t("diag.candidates")}</span><span class="diag-v mono">${esc(ds.candidates.split(",").join("   "))}</span></div>`,
+      `<div class="diag-row"><span class="diag-k">${t("diag.candidates")}</span><span class="diag-v mono d-addr">${esc(ds.candidates.split(",").join("   "))}</span></div>`,
     );
   return parts.length ? `<div class="sym-diag">${parts.join("")}</div>` : "";
 }
