@@ -32,8 +32,8 @@ scriptable command-line tool. Both are built on the same engine crate.
   wildcards instead of brittle fixed bytes.
 - **Deterministic output.** Scans and generated signatures sort and de-duplicate to a stable order,
   which makes diffs and version comparisons meaningful.
-- **Offline and local.** The desktop app makes no network requests. A strict Content-Security-Policy
-  blocks every remote origin, and the scan history lives in a local SQLite database.
+- **Offline and local.** The desktop app makes no network requests. A Content-Security-Policy blocks
+  every remote origin, and the scan history lives in a local SQLite database.
 
 ## Feature highlights
 
@@ -73,8 +73,8 @@ scriptable command-line tool. Both are built on the same engine crate.
   Pick blur, or a showcase mode that swaps in realistic fake values instead. Visual only; the real
   data is untouched.
 - Five interface languages: English, Japanese, Chinese, Korean, and Hebrew (right to left).
-- Fully offline. The editor and the history database are local, and a strict Content-Security-Policy
-  blocks every remote origin.
+- Fully offline. The editor and the history database are local, and a Content-Security-Policy blocks
+  every remote origin.
 
 **Command line (`maple-cli`)**
 
@@ -238,8 +238,9 @@ See [patterns.sample.txt](patterns.sample.txt) for a worked example.
 
 The matcher anchors each pattern on its rarest fixed byte (a static frequency table), not the first
 one, so common bytes like `0x48` (REX.W) do not flood the prefilter. It uses an AVX2 path chosen at
-runtime via `is_x86_feature_detected!` with a scalar fallback, and read buffers use uninitialized
-capacity to skip a redundant zeroing pass.
+runtime via `is_x86_feature_detected!` with a scalar fallback. For large pattern sets it switches to
+a single-pass multi-pattern index, so cost grows with the buffer plus matches rather than the buffer
+times the pattern count.
 
 Synthetic throughput (criterion `cargo bench`, 8 MiB code-like buffer): the rarest-byte anchor scans
 at roughly 29 GiB/s, versus roughly 0.8 GiB/s when forced onto a common byte like `0x48`, about a 37x
