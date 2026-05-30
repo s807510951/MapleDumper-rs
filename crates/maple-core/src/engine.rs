@@ -59,8 +59,10 @@ const RESOLVE_MARGIN: usize = 24;
 const SCAN_CHUNK: usize = 1 << 18;
 // Above this many patterns the per-pattern AVX2 scan (one buffer pass per pattern) is replaced by a
 // single-pass multi-pattern index, so cost grows with the buffer plus matches, not buffer times
-// pattern count. Below it the tuned AVX2 path is kept.
-const MULTI_PATTERN_THRESHOLD: usize = 64;
+// pattern count. The crossover is benchmark-driven (examples/scan_matrix.rs): on an 8 MiB code-like
+// buffer the index is roughly break-even at 10 patterns and 2x to 14x faster by 50, so 32 keeps the
+// well-tested AVX2 path for small sets while switching early enough to win on large ones.
+const MULTI_PATTERN_THRESHOLD: usize = 32;
 
 pub(crate) fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
