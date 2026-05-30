@@ -387,8 +387,11 @@ fn run_scan(
         total_matches: result.total_matches as i64,
         scan_ms: scan_ms as i64,
     };
-    if let Ok(mut conn) = db.lock() {
-        let _ = history::insert_scan(&mut conn, &record, &new_findings);
+    {
+        let mut conn = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Err(e) = history::insert_scan(&mut conn, &record, &new_findings) {
+            eprintln!("[warn] failed to save scan to history: {e}");
+        }
     }
 
     let mut guard = last
@@ -845,8 +848,22 @@ async fn pick_save_file(default_name: String) -> Option<String> {
     .flatten()
 }
 
+// The frontend only reads and writes pattern lists and exported reports, so confine these commands
+// to text-like extensions instead of letting an injected script touch arbitrary files.
+fn is_text_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [
+        ".txt", ".h", ".hpp", ".inc", ".json", ".ct", ".csv", ".md", ".ini", ".cfg", ".log",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
+}
+
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, String> {
+    if !is_text_path(&path) {
+        return Err("only text, pattern, and report files can be read".to_string());
+    }
     std::fs::read(&path)
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .map_err(|e| e.to_string())
@@ -854,6 +871,9 @@ fn read_text_file(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    if !is_text_path(&path) {
+        return Err("only text, pattern, and report files can be written".to_string());
+    }
     std::fs::write(&path, contents).map_err(|e| e.to_string())
 }
 
