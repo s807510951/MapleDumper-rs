@@ -680,6 +680,25 @@ fn history_builds(state: tauri::State<'_, AppState>) -> Result<Vec<history::Buil
     history::group_by_build(&conn).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+struct HistoryPage {
+    total: i64,
+    scans: Vec<history::ScanRow>,
+}
+
+#[tauri::command]
+fn history_page(
+    state: tauri::State<'_, AppState>,
+    limit: i64,
+    offset: i64,
+) -> Result<HistoryPage, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let total = history::count_scans(&conn).map_err(|e| e.to_string())?;
+    let scans = history::list_scans_page(&conn, limit.clamp(1, 500), offset.max(0))
+        .map_err(|e| e.to_string())?;
+    Ok(HistoryPage { total, scans })
+}
+
 #[tauri::command]
 fn history_findings(
     state: tauri::State<'_, AppState>,
@@ -1305,6 +1324,7 @@ fn main() {
             export_text,
             diff_dumps,
             history_builds,
+            history_page,
             history_findings,
             history_diff,
             history_delete,
