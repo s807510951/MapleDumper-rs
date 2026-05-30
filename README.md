@@ -263,6 +263,25 @@ CUserLocal = 48 8B 0D ?? ?? ?? ?? @kind=ptr @section=code @hits=unique
 
 See [patterns.sample.txt](patterns.sample.txt) for a worked example.
 
+**String-anchored patterns.** Instead of bytes, a pattern can name a read-only string the target
+function references. The string survives a recompile that shifts the surrounding bytes, so it locates
+the same function across client versions where a byte signature breaks:
+
+```
+StatWindow = @string=UI/UIWindow2.img/Stat
+```
+
+If no single string is unique to the function, add a second with `@also`; the target is the one
+referencing both:
+
+```
+StatWindow = @string=UI/UIWindow2.img/Stat @also=UI/UIWindow2.img/Stat/main
+```
+
+The engine finds the string in data, follows the unique code reference to it, and resolves to the
+enclosing function entry. On real multi-version MapleStory clients these resolve to the same function
+72-100% of the time across versions, against 0-2% for byte signatures.
+
 ## Architecture at a glance
 
 | Crate        | Role                                                                          |

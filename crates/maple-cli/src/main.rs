@@ -11,7 +11,7 @@ use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file, parse_patter
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
     ScanResult, Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp,
-    profile, scan,
+    profile, resolve_string_anchors, scan,
 };
 use maple_core::{
     FileImage, HoldoutResult, ImageInput, NegativeHit, SigCandidate, SigOptions, SigReport,
@@ -472,7 +472,7 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
 
     let regions = target.regions();
     println!("[+] scanning {} regions", regions.len());
-    let result = scan(
+    let mut result = scan(
         &target,
         target.module.base,
         target.module.size,
@@ -480,6 +480,24 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
         &patterns,
         arch,
     );
+
+    if patterns.iter().any(|p| p.string_anchor.is_some()) {
+        let img = ImageInput {
+            label: String::new(),
+            source: &target,
+            base: target.module.base,
+            size: target.module.size,
+            code_regions: target.code_regions(),
+            regions: target.regions(),
+            import: None,
+            arch,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        result.merge(resolve_string_anchors(&img, &patterns));
+    }
 
     println!();
     println!("[+] found {}", result.found.len());
