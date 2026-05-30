@@ -749,15 +749,7 @@ pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
         .sum()
 }
 
-/// A signature that anchors on read-only strings a function references rather than on its raw bytes.
-/// The string content survives a recompile that shifts every surrounding byte, so it locates the same
-/// function across client versions where a byte pattern would not. A second string pins down a
-/// function whose individual strings are each shared: the target is the one referencing both.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StringAnchor {
-    pub text: String,
-    pub also: Option<String>,
-}
+pub use crate::domain::StringAnchor;
 
 fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
     let ascii = text.as_bytes();

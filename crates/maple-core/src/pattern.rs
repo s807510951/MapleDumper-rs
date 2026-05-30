@@ -1,4 +1,4 @@
-use crate::domain::{ExpectedHits, ResolvePlan, ResolverSpec, SectionKind};
+use crate::domain::{ExpectedHits, ResolvePlan, ResolverSpec, SectionKind, StringAnchor};
 use crate::resolver::Kind;
 use std::collections::HashMap;
 use std::path::Path;
@@ -52,6 +52,9 @@ pub struct Pattern {
     /// An explicit, typed resolution plan from a pattern schema. `None` means the resolver kind is
     /// derived from the name suffix (the legacy form).
     pub resolve: Option<ResolvePlan>,
+    /// A string-anchored target (located by referenced strings, not bytes). When set, `signature` is
+    /// empty and the engine resolves this by string reference instead of scanning.
+    pub string_anchor: Option<StringAnchor>,
 }
 
 enum Token {
@@ -231,6 +234,30 @@ fn build_resolve_plan(
     Ok(Some(plan))
 }
 
+fn build_string_anchor(directives: &[(String, String)]) -> Option<StringAnchor> {
+    let find = |key: &str| {
+        directives
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
+    find("string")
+        .filter(|t| !t.is_empty())
+        .map(|text| StringAnchor {
+            text,
+            also: find("also").filter(|t| !t.is_empty()),
+        })
+}
+
+fn partition_anchor_directives(
+    directives: Vec<(String, String)>,
+) -> (Option<StringAnchor>, Vec<(String, String)>) {
+    let (anchor, resolve): (Vec<_>, Vec<_>) = directives
+        .into_iter()
+        .partition(|(k, _)| matches!(k.as_str(), "string" | "also"));
+    (build_string_anchor(&anchor), resolve)
+}
+
 #[must_use]
 pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -264,15 +291,17 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
         }
         if let Some((name, aob, note)) = split_name_aob(line) {
             let (aob, directives) = split_directives(&aob);
+            let (string_anchor, directives) = partition_anchor_directives(directives);
             let resolve = build_resolve_plan(&name, &directives).ok().flatten();
             let signature = parse_signature(&aob);
-            if !signature.is_empty() {
+            if !signature.is_empty() || string_anchor.is_some() {
                 out.push(Pattern {
                     name,
                     category: category.clone(),
                     note: (!note.is_empty()).then_some(note),
                     signature,
                     resolve,
+                    string_anchor,
                 });
             }
         }
@@ -380,6 +409,30 @@ pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, V
         };
 
         let (aob, directives) = split_directives(&aob);
+        let (string_anchor, directives) = partition_anchor_directives(directives);
+        if let Some(anchor) = string_anchor {
+            if let Some(prev) = seen_names.get(&name) {
+                issues.push(ParseIssue {
+                    line: line_no,
+                    severity: ParseSeverity::Error,
+                    message: format!("duplicate pattern name '{name}' (first seen on line {prev})"),
+                });
+                continue;
+            }
+            seen_names.insert(name.clone(), line_no);
+            out.push(Pattern {
+                name,
+                category: category.clone(),
+                note: (!note.is_empty()).then_some(note),
+                signature: Signature {
+                    bytes: Vec::new(),
+                    mask: Vec::new(),
+                },
+                resolve: None,
+                string_anchor: Some(anchor),
+            });
+            continue;
+        }
         let resolve = match build_resolve_plan(&name, &directives) {
             Ok(plan) => plan,
             Err(msg) => {
@@ -470,6 +523,7 @@ pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, V
             note: (!note.is_empty()).then_some(note),
             signature,
             resolve,
+            string_anchor: None,
         });
     }
 
@@ -746,5 +800,34 @@ mod tests {
             p[0].resolve.as_ref().unwrap().kind,
             ResolverSpec::NestedCall
         );
+    }
+
+    #[test]
+    fn parses_a_string_anchored_pattern() {
+        let pats = parse_patterns("Stat = @string=UI/UIWindow2.img/Stat", Arch::X86);
+        assert_eq!(pats.len(), 1);
+        let anchor = pats[0].string_anchor.as_ref().unwrap();
+        assert_eq!(anchor.text, "UI/UIWindow2.img/Stat");
+        assert!(anchor.also.is_none());
+        assert!(pats[0].signature.is_empty());
+    }
+
+    #[test]
+    fn parses_a_paired_string_anchor() {
+        let pats = parse_patterns("Stat = @string=pathA @also=pathB", Arch::X86);
+        let anchor = pats[0].string_anchor.as_ref().unwrap();
+        assert_eq!(anchor.text, "pathA");
+        assert_eq!(anchor.also.as_deref(), Some("pathB"));
+    }
+
+    #[test]
+    fn strict_accepts_a_string_anchored_pattern() {
+        let parsed = parse_patterns_strict("Stat = @string=UI/Foo", Arch::X86).unwrap();
+        assert_eq!(parsed.patterns.len(), 1);
+        assert_eq!(
+            parsed.patterns[0].string_anchor.as_ref().unwrap().text,
+            "UI/Foo"
+        );
+        assert!(parsed.patterns[0].signature.is_empty());
     }
 }

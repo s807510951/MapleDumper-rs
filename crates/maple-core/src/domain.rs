@@ -215,6 +215,15 @@ impl ResolvePlan {
     }
 }
 
+/// A target located by the read-only strings a function references rather than by its bytes, so it
+/// survives a recompile that shifts the surrounding code. A second string pins down a function whose
+/// strings are each shared with others: the target is the one referencing both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringAnchor {
+    pub text: String,
+    pub also: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
