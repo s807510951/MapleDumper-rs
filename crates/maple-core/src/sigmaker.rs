@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::fileimage::{RelocKind, RelocLookup};
 use crate::memory::{MemorySource, Region};
 use crate::pattern::{Arch, Signature, try_signature_from_aob};
@@ -747,13 +749,14 @@ pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
         .sum()
 }
 
-/// A signature that anchors on a read-only string a function references rather than on its raw bytes.
+/// A signature that anchors on read-only strings a function references rather than on its raw bytes.
 /// The string content survives a recompile that shifts every surrounding byte, so it locates the same
-/// function across client versions where a byte pattern would not: find the string in data, then the
-/// unique code reference to it.
+/// function across client versions where a byte pattern would not. A second string pins down a
+/// function whose individual strings are each shared: the target is the one referencing both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StringAnchor {
     pub text: String,
+    pub also: Option<String>,
 }
 
 fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
@@ -818,32 +821,62 @@ fn enclosing_function(img: &ImageInput, site_rva: usize) -> usize {
         .map_or(site_rva, |(i, _)| start + i)
 }
 
-#[must_use]
-pub fn resolve_string_anchor(img: &ImageInput, anchor: &StringAnchor) -> Option<usize> {
-    let data_abs = find_string_in_data(img, &anchor.text)?;
-    let mut functions: Vec<usize> = xref_sites(img, data_abs)
+fn functions_referencing(img: &ImageInput, text: &str) -> Option<BTreeSet<usize>> {
+    let data_abs = find_string_in_data(img, text)?;
+    let set: BTreeSet<usize> = xref_sites(img, data_abs)
         .into_iter()
         .map(|site| enclosing_function(img, site - img.base))
         .collect();
-    functions.sort_unstable();
-    functions.dedup();
-    match functions.as_slice() {
-        [entry] => Some(*entry),
-        _ => None,
+    (!set.is_empty()).then_some(set)
+}
+
+fn only(set: BTreeSet<usize>) -> Option<usize> {
+    let mut it = set.into_iter();
+    it.next().filter(|_| it.next().is_none())
+}
+
+#[must_use]
+pub fn resolve_string_anchor(img: &ImageInput, anchor: &StringAnchor) -> Option<usize> {
+    let primary = functions_referencing(img, &anchor.text)?;
+    match &anchor.also {
+        None => only(primary),
+        Some(second) => {
+            let secondary = functions_referencing(img, second)?;
+            only(primary.intersection(&secondary).copied().collect())
+        }
     }
 }
 
-/// Build a string anchor for the function at `target_rva`, preferring its longest referenced string
-/// and keeping the first that pins down a single enclosing function. Returns `None` if no referenced
-/// string resolves uniquely.
+/// Build a string anchor for the function at `target_rva`. Prefers a single string that already pins
+/// down one enclosing function (longest first); failing that, a pair whose referencing sets intersect
+/// to exactly that function. Returns `None` if its strings cannot isolate it.
 #[must_use]
 pub fn make_string_anchor(img: &ImageInput, target_rva: usize) -> Option<StringAnchor> {
     let mut strings = fn_identity(img, target_rva).strings;
     strings.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    strings
+    strings.truncate(6);
+    let sets: Vec<(String, BTreeSet<usize>)> = strings
         .into_iter()
-        .map(|text| StringAnchor { text })
-        .find(|a| resolve_string_anchor(img, a).is_some())
+        .filter_map(|s| functions_referencing(img, &s).map(|f| (s, f)))
+        .collect();
+
+    if let Some((text, _)) = sets.iter().find(|(_, f)| f.len() == 1) {
+        return Some(StringAnchor {
+            text: text.clone(),
+            also: None,
+        });
+    }
+    for (i, (a, fa)) in sets.iter().enumerate() {
+        for (b, fb) in &sets[i + 1..] {
+            if fa.intersection(fb).count() == 1 {
+                return Some(StringAnchor {
+                    text: a.clone(),
+                    also: Some(b.clone()),
+                });
+            }
+        }
+    }
+    None
 }
 
 // A 0-100 confidence derived from the grade band and refined by signature density and the
@@ -1813,7 +1846,8 @@ mod tests {
             resolve_string_anchor(
                 &input,
                 &StringAnchor {
-                    text: "absent".to_string()
+                    text: "absent".to_string(),
+                    also: None,
                 }
             )
             .is_none()
@@ -1855,6 +1889,53 @@ mod tests {
             reloc: None,
         };
         let anchor = make_string_anchor(&input, 0x110).expect("a string anchor");
+        assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x100));
+    }
+
+    #[test]
+    fn string_anchor_uses_a_pair_when_each_string_is_shared() {
+        let base = 0x3000;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x16].copy_from_slice(b"alpha\0");
+        mem[0x20..0x25].copy_from_slice(b"beta\0");
+        let push = |mem: &mut [u8], at: usize, addr: u32| {
+            mem[at] = 0x68;
+            mem[at + 1..at + 5].copy_from_slice(&addr.to_le_bytes());
+        };
+        for entry in [0x100usize, 0x140, 0x180] {
+            mem[entry..entry + 3].copy_from_slice(&[0x55, 0x8B, 0xEC]);
+        }
+        push(&mut mem, 0x103, 0x3010); // F1 references alpha
+        push(&mut mem, 0x108, 0x3020); // F1 references beta
+        push(&mut mem, 0x143, 0x3010); // F2 references alpha
+        push(&mut mem, 0x183, 0x3020); // F3 references beta
+        let src = BufferSource::new(base, mem);
+        let input = ImageInput {
+            label: "t".to_string(),
+            source: &src,
+            base,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x100,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x100,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        // neither string alone is unique, but only F1 references both
+        let anchor = make_string_anchor(&input, 0x103).expect("a paired anchor");
+        assert!(anchor.also.is_some());
         assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x100));
     }
 
