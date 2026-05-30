@@ -158,6 +158,7 @@ impl Default for SigOptions {
     }
 }
 
+#[derive(Clone)]
 pub struct ImageInput<'a> {
     pub label: String,
     pub source: &'a dyn MemorySource,
@@ -228,6 +229,13 @@ pub struct InputInfo {
 pub struct NegativeHit {
     pub label: String,
     pub count: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct HoldoutResult {
+    pub held_out: String,
+    pub generated: bool,
+    pub matched_holdout: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -324,6 +332,54 @@ pub fn negative_corpus_hits(aob: &str, negatives: &[ImageInput]) -> Vec<Negative
             })
         })
         .collect()
+}
+
+/// Leave-one-out validation: for each build, regenerate the signature from the others and check it
+/// still uniquely matches the held-out build. Generation only proves a signature fits the builds it
+/// was trained on; a signature that fits those but fails a build it never saw is overfit to the
+/// corpus. Needs at least three builds (two to train on, one to hold out) and returns one result per
+/// eligible held-out build. A reference build that defines the target cannot itself be held out.
+#[must_use]
+pub fn holdout_validate(
+    images: &[ImageInput],
+    spec: &TargetSpec,
+    opts: &SigOptions,
+) -> Vec<HoldoutResult> {
+    if images.len() < 3 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for i in 0..images.len() {
+        let adjusted = match spec {
+            TargetSpec::Aob(s) => TargetSpec::Aob(s.clone()),
+            TargetSpec::Ref { image, rva } => {
+                if i == *image {
+                    continue; // the reference defines the target, so it cannot be held out
+                }
+                let image = if i < *image { image - 1 } else { *image };
+                TargetSpec::Ref { image, rva: *rva }
+            }
+        };
+        let train: Vec<ImageInput> = images
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, img)| img.clone())
+            .collect();
+        let report = generate(&train, &adjusted, opts);
+        let matched = report.chosen.as_ref().is_some_and(|c| {
+            crate::pattern::try_signature_from_aob(&c.aob)
+                .ok()
+                .and_then(|sig| CompiledPattern::new(&sig))
+                .is_some_and(|pat| CodeCache::build(&images[i]).locate(&pat).0 == 1)
+        });
+        out.push(HoldoutResult {
+            held_out: images[i].label.clone(),
+            generated: report.chosen.is_some(),
+            matched_holdout: matched,
+        });
+    }
+    out
 }
 
 struct InstrMask {
@@ -1330,6 +1386,44 @@ mod tests {
         let clean = BufferSource::new(0x5000, vec![0x90u8; 64]);
         let negs = [img("clean", &clean, 0x5000, 64)];
         assert!(negative_corpus_hits("not a signature", &negs).is_empty());
+    }
+
+    #[test]
+    fn holdout_passes_when_the_signature_generalizes() {
+        // Three builds of the same function, differing only in the masked call target. A signature
+        // generated from any two must still uniquely match the third.
+        let a = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let b = BufferSource::new(0x1000, blob(0x20, 0xBB));
+        let c = BufferSource::new(0x1000, blob(0x30, 0xCC));
+        let images = [
+            img("a", &a, 0x1000, 49),
+            img("b", &b, 0x1000, 49),
+            img("c", &c, 0x1000, 49),
+        ];
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        let results = holdout_validate(
+            &images,
+            &TargetSpec::Aob(aob.to_string()),
+            &SigOptions::default(),
+        );
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r.generated && r.matched_holdout));
+    }
+
+    #[test]
+    fn holdout_is_skipped_below_three_builds() {
+        let a = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let b = BufferSource::new(0x1000, blob(0x20, 0xBB));
+        let images = [img("a", &a, 0x1000, 49), img("b", &b, 0x1000, 49)];
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        assert!(
+            holdout_validate(
+                &images,
+                &TargetSpec::Aob(aob.to_string()),
+                &SigOptions::default()
+            )
+            .is_empty()
+        );
     }
 
     #[test]

@@ -14,8 +14,8 @@ use maple_core::{
     profile, scan,
 };
 use maple_core::{
-    FileImage, ImageInput, NegativeHit, SigCandidate, SigOptions, SigReport, TargetKind,
-    TargetSpec, generate, negative_corpus_hits,
+    FileImage, HoldoutResult, ImageInput, NegativeHit, SigCandidate, SigOptions, SigReport,
+    TargetKind, TargetSpec, generate, holdout_validate, negative_corpus_hits,
 };
 
 #[derive(Parser)]
@@ -163,6 +163,9 @@ struct MksigArgs {
     /// Add every .exe in a folder to the negative corpus
     #[arg(long, value_name = "DIR")]
     negative_dir: Option<PathBuf>,
+    /// Leave-one-out check: regenerate from each subset and confirm the held-out build still matches
+    #[arg(long)]
+    holdout: bool,
     /// Print the full report as JSON
     #[arg(long)]
     json: bool,
@@ -848,6 +851,12 @@ struct JNeg {
     count: usize,
 }
 #[derive(Serialize)]
+struct JHold {
+    held_out: String,
+    generated: bool,
+    matched: bool,
+}
+#[derive(Serialize)]
 struct JReport {
     arch: String,
     unique_builds: usize,
@@ -857,6 +866,7 @@ struct JReport {
     alternates: Vec<JCand>,
     rejected: Vec<JCand>,
     negative_hits: Vec<JNeg>,
+    holdout: Vec<JHold>,
     diagnostics: Vec<String>,
 }
 
@@ -885,7 +895,7 @@ fn jcand(c: &SigCandidate) -> JCand {
     }
 }
 
-fn json_report(r: &SigReport, negatives: &[NegativeHit]) -> String {
+fn json_report(r: &SigReport, negatives: &[NegativeHit], holdout: &[HoldoutResult]) -> String {
     let report = JReport {
         arch: arch_str(r.arch).to_string(),
         unique_builds: r.unique_builds,
@@ -914,6 +924,14 @@ fn json_report(r: &SigReport, negatives: &[NegativeHit]) -> String {
             .map(|h| JNeg {
                 label: h.label.clone(),
                 count: h.count,
+            })
+            .collect(),
+        holdout: holdout
+            .iter()
+            .map(|h| JHold {
+                held_out: h.held_out.clone(),
+                generated: h.generated,
+                matched: h.matched_holdout,
             })
             .collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
@@ -1045,6 +1063,12 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
 
     let report = generate(&inputs, &spec, &opts);
 
+    let holdout = if m.holdout {
+        holdout_validate(&inputs, &spec, &opts)
+    } else {
+        Vec::new()
+    };
+
     let neg_paths = gather_negatives(&m.negative, m.negative_dir.as_deref())?;
     let neg_hits = match &report.chosen {
         Some(chosen) if !neg_paths.is_empty() => {
@@ -1078,10 +1102,10 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
     };
 
     if m.json || m.json_out.is_some() {
-        let json = json_report(&report, &neg_hits);
+        let json = json_report(&report, &neg_hits, &holdout);
         if let Some(path) = &m.json_out {
             std::fs::write(path, &json).map_err(|e| format!("write {}: {e}", path.display()))?;
-            println!("[+] wrote {}", path.display());
+            eprintln!("[+] wrote {}", path.display());
         }
         if m.json {
             println!("{json}");
@@ -1090,9 +1114,10 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
         print_sig_report(&report, &opts);
     }
 
+    // Validation summaries go to stderr so a piped --json stdout stays pure JSON.
     if neg_hits.is_empty() {
         if report.chosen.is_some() && !neg_paths.is_empty() {
-            println!("[+] clean against {} negative module(s)", neg_paths.len());
+            eprintln!("[+] clean against {} negative module(s)", neg_paths.len());
         }
     } else {
         eprintln!(
@@ -1102,6 +1127,28 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
         for h in &neg_hits {
             let plural = if h.count == 1 { "" } else { "es" };
             eprintln!("      {} ({} match{plural})", h.label, h.count);
+        }
+    }
+
+    if m.holdout {
+        if holdout.is_empty() {
+            eprintln!("[i] holdout needs at least 3 builds; skipped");
+        } else {
+            let passed = holdout.iter().filter(|r| r.matched_holdout).count();
+            eprintln!(
+                "[+] holdout: {passed}/{} held-out build(s) re-matched",
+                holdout.len()
+            );
+            for r in &holdout {
+                let verdict = if r.matched_holdout {
+                    "ok"
+                } else if r.generated {
+                    "MISS, signature did not match the held-out build"
+                } else {
+                    "no signature from the remaining builds"
+                };
+                eprintln!("      hold out {}: {verdict}", r.held_out);
+            }
         }
     }
     Ok(())
@@ -1152,12 +1199,30 @@ mod tests {
             rejected: vec![cand],
             diagnostics: Vec::new(),
         };
-        let json = json_report(&report, &[]);
+        let json = json_report(&report, &[], &[]);
         assert_eq!(
             json.matches("\"resolved_target_rva\": \"0x1000\"").count(),
             3
         );
         assert_eq!(json.matches("\"target_type\": \"code\"").count(), 3);
+    }
+
+    #[test]
+    fn cli_mksig_accepts_holdout_flag() {
+        let cli = Cli::try_parse_from([
+            "mapledumper",
+            "mksig",
+            "--client",
+            "a.exe",
+            "--sig",
+            "48 8B",
+            "--holdout",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Mksig(m) => assert!(m.holdout),
+            _ => panic!("expected mksig"),
+        }
     }
 
     #[test]

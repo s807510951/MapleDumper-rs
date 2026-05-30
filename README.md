@@ -169,6 +169,7 @@ mksig:
   --ref <exe> --rva <hex>   target: an address in one reference client
   --min-fixed-ratio <f>     reject signatures below this fixed-byte ratio (default 0.30)
   --negative <exe> / --negative-dir <dir>   unrelated modules the result must not match
+  --holdout          leave-one-out: regenerate per subset and confirm each held-out build matches
   --json / --json-out <path>   emit the full report as JSON
 
 mapledumper help <command>   prints the full options for one command.
