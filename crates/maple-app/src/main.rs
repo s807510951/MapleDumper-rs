@@ -256,7 +256,18 @@ fn run_scan(
         poll: Duration::from_millis(300),
     };
 
-    let patterns = maple_core::pattern::parse_patterns(&req.patterns, arch);
+    let patterns = match maple_core::pattern::parse_patterns_strict(&req.patterns, arch) {
+        Ok(parsed) => parsed.patterns,
+        Err(issues) => {
+            let detail = issues
+                .iter()
+                .filter(|i| i.severity == maple_core::pattern::ParseSeverity::Error)
+                .map(|i| format!("line {}: {}", i.line, i.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(format!("pattern errors: {detail}"));
+        }
+    };
     if patterns.is_empty() {
         return Err("no patterns to scan; the pattern list is empty".to_string());
     }
@@ -273,7 +284,14 @@ fn run_scan(
     let bytes_scanned: u64 = regions.iter().map(|r| r.size as u64).sum();
     let region_count = regions.len();
     let scan_started = Instant::now();
-    let result = maple_core::scan(&target, target.module.base, &regions, &patterns, arch);
+    let result = maple_core::scan(
+        &target,
+        target.module.base,
+        target.module.size,
+        &regions,
+        &patterns,
+        arch,
+    );
     let scan_ms = scan_started.elapsed().as_millis();
     let elapsed_ms = started.elapsed().as_millis();
 
@@ -369,11 +387,17 @@ fn run_scan(
         total_matches: result.total_matches as i64,
         scan_ms: scan_ms as i64,
     };
-    if let Ok(mut conn) = db.lock() {
-        let _ = history::insert_scan(&mut conn, &record, &new_findings);
+    {
+        let mut conn = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Err(e) = history::insert_scan(&mut conn, &record, &new_findings) {
+            eprintln!("[warn] failed to save scan to history: {e}");
+        }
     }
 
-    *last.lock().unwrap() = Some(LastScan {
+    let mut guard = last
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = Some(LastScan {
         findings: result.findings,
         module_name,
         module_base,
@@ -526,7 +550,10 @@ fn cancel_scan(state: tauri::State<'_, AppState>) {
 
 #[tauri::command]
 fn export_text(state: tauri::State<'_, AppState>, format: String) -> Result<String, String> {
-    let guard = state.last.lock().unwrap();
+    let guard = state
+        .last
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let last = guard
         .as_ref()
         .ok_or_else(|| "run a scan first; there is nothing to export yet".to_string())?;
@@ -783,9 +810,14 @@ fn disassemble(hex: String, bits: u32, base: String) -> Vec<String> {
     let mut instr = Instruction::default();
     let mut out = Vec::new();
     while decoder.can_decode() {
+        let start_pos = decoder.position();
         decoder.decode_out(&mut instr);
         if instr.is_invalid() {
-            break;
+            if decoder.set_position(start_pos + 1).is_err() {
+                break;
+            }
+            decoder.set_ip(ip + (start_pos + 1) as u64);
+            continue;
         }
         let mut text = String::new();
         formatter.format(&instr, &mut text);
@@ -821,8 +853,22 @@ async fn pick_save_file(default_name: String) -> Option<String> {
     .flatten()
 }
 
+// The frontend only reads and writes pattern lists and exported reports, so confine these commands
+// to text-like extensions instead of letting an injected script touch arbitrary files.
+fn is_text_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [
+        ".txt", ".h", ".hpp", ".inc", ".json", ".ct", ".csv", ".md", ".ini", ".cfg", ".log",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
+}
+
 #[tauri::command]
 fn read_text_file(path: String) -> Result<String, String> {
+    if !is_text_path(&path) {
+        return Err("only text, pattern, and report files can be read".to_string());
+    }
     std::fs::read(&path)
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .map_err(|e| e.to_string())
@@ -830,6 +876,9 @@ fn read_text_file(path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    if !is_text_path(&path) {
+        return Err("only text, pattern, and report files can be written".to_string());
+    }
     std::fs::write(&path, contents).map_err(|e| e.to_string())
 }
 
@@ -1226,15 +1275,26 @@ async fn generate_signature(
     }
 }
 
+fn open_history_db() -> Connection {
+    let path = history::default_db_path();
+    match history::open(&path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!(
+                "[warn] could not open history database at {}: {e}; history will not be saved this session",
+                path.display()
+            );
+            history::open_memory()
+        }
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
             cancel: Arc::new(AtomicBool::new(false)),
             last: Arc::new(Mutex::new(None)),
-            db: Arc::new(Mutex::new(
-                history::open(&history::default_db_path())
-                    .unwrap_or_else(|_| history::open_memory()),
-            )),
+            db: Arc::new(Mutex::new(open_history_db())),
         })
         .invoke_handler(tauri::generate_handler![
             engine_version,

@@ -6,10 +6,11 @@ use std::time::Duration;
 use serde::Serialize;
 
 use maple_core::output::{cheat_table, offsets_header, plain_text};
-use maple_core::pattern::{Arch, parse_patterns_file};
+use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file_strict};
 use maple_core::{
-    AttachOptions, BuildStamp, DiffReport, Locator, Pattern, ProfileReport, ScanResult, Status,
-    Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp, profile, scan,
+    AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
+    ScanResult, Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp,
+    profile, scan,
 };
 use maple_core::{
     FileImage, ImageInput, SigCandidate, SigOptions, SigReport, TargetKind, TargetSpec, generate,
@@ -18,6 +19,7 @@ use maple_core::{
 struct Args {
     process: Option<String>,
     class: Option<String>,
+    pid: Option<u32>,
     module: Option<String>,
     patterns: PathBuf,
     arch: Arch,
@@ -52,6 +54,7 @@ USAGE:
 ATTACH:
     --process <name>   attach by process name (\".exe\" optional, case-insensitive)
     --class <class>    attach by top-level window class
+    --pid <pid>        attach by process id (use when several processes share a name)
     --module <name>    module to scan (default: process name)
     --no-wait          fail immediately if the target is not running
     --timeout <secs>   max seconds to wait for the target (0 = forever, default)
@@ -112,6 +115,7 @@ fn parse_arch(s: &str) -> Result<Arch, String> {
 fn parse_args() -> Result<Args, String> {
     let mut process = None;
     let mut class = None;
+    let mut pid = None;
     let mut module = None;
     let mut patterns = PathBuf::from("patterns.txt");
     let mut arch = Arch::X64;
@@ -141,6 +145,14 @@ fn parse_args() -> Result<Args, String> {
         match arg.as_str() {
             "--process" => process = Some(value(&mut it, "--process")?),
             "--class" => class = Some(value(&mut it, "--class")?),
+            "--pid" => {
+                let raw = value(&mut it, "--pid")?;
+                pid = Some(
+                    raw.trim()
+                        .parse()
+                        .map_err(|_| format!("invalid --pid '{raw}'"))?,
+                );
+            }
             "--module" => module = Some(value(&mut it, "--module")?),
             "--patterns" => patterns = PathBuf::from(value(&mut it, "--patterns")?),
             "--arch" => arch = parse_arch(&value(&mut it, "--arch")?)?,
@@ -199,6 +211,7 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         process,
         class,
+        pid,
         module,
         patterns,
         arch,
@@ -292,8 +305,37 @@ fn run() -> Result<(), String> {
     }
 
     let patterns = if args.asm.is_none() {
-        let patterns = parse_patterns_file(&args.patterns, args.arch)
+        let parsed = parse_patterns_file_strict(&args.patterns, args.arch)
             .map_err(|e| format!("failed to read {}: {e}", args.patterns.display()))?;
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(issues) => {
+                for issue in &issues {
+                    let tag = match issue.severity {
+                        ParseSeverity::Error => "x",
+                        ParseSeverity::Warning => "!",
+                    };
+                    eprintln!(
+                        "[{tag}] {}:{} {}",
+                        args.patterns.display(),
+                        issue.line,
+                        issue.message
+                    );
+                }
+                let errors = issues
+                    .iter()
+                    .filter(|i| i.severity == ParseSeverity::Error)
+                    .count();
+                return Err(format!(
+                    "{errors} pattern error(s) in {}",
+                    args.patterns.display()
+                ));
+            }
+        };
+        for w in &parsed.warnings {
+            eprintln!("[!] {}:{} {}", args.patterns.display(), w.line, w.message);
+        }
+        let patterns = parsed.patterns;
         if patterns.is_empty() {
             return Err(format!(
                 "no patterns loaded from {}",
@@ -310,23 +352,41 @@ fn run() -> Result<(), String> {
         Vec::new()
     };
 
-    let loc = locator(&args)?;
     let module = module_name(&args);
     let opts = AttachOptions {
         wait: args.wait,
         timeout: args.timeout,
         poll: Duration::from_millis(300),
     };
-    if args.wait {
-        let what = match &loc {
-            Locator::Name(name) => format!("process {name}"),
-            Locator::Class(class) => format!("window class {class}"),
-        };
-        println!("[*] waiting for {what} (Ctrl-C to cancel)...");
-    }
     let cancel = AtomicBool::new(false);
-    let target =
-        Target::attach(&loc, &module, &opts, &cancel).map_err(|e| format!("attach failed: {e}"))?;
+    let target = if let Some(pid) = args.pid {
+        println!("[+] attaching to pid {pid}");
+        Target::attach_pid(pid, &module).map_err(|e| format!("attach failed: {e}"))?
+    } else {
+        let loc = locator(&args)?;
+        if let Locator::Name(name) = &loc {
+            let candidates = maple_core::process::process_candidates(name);
+            if candidates.len() > 1 {
+                println!("[!] {} processes match '{name}':", candidates.len());
+                for c in &candidates {
+                    println!(
+                        "      pid {}  {}",
+                        c.pid,
+                        c.path.as_deref().unwrap_or("(path unavailable)")
+                    );
+                }
+                println!("    attaching to the first; pass --pid <pid> to choose another");
+            }
+        }
+        if args.wait {
+            let what = match &loc {
+                Locator::Name(name) => format!("process {name}"),
+                Locator::Class(class) => format!("window class {class}"),
+            };
+            println!("[*] waiting for {what} (Ctrl-C to cancel)...");
+        }
+        Target::attach(&loc, &module, &opts, &cancel).map_err(|e| format!("attach failed: {e}"))?
+    };
     println!(
         "[+] attached; module {} base 0x{:X} size 0x{:X}",
         module, target.module.base, target.module.size
@@ -370,14 +430,28 @@ fn run() -> Result<(), String> {
             "[*] profiling {} executable regions (runs several full reads, give it a few seconds)...",
             regions.len()
         );
-        let report = profile(&target, target.module.base, &regions, &patterns, args.arch);
+        let report = profile(
+            &target,
+            target.module.base,
+            target.module.size,
+            &regions,
+            &patterns,
+            args.arch,
+        );
         print_profile(&report);
         return Ok(());
     }
 
     let regions = target.regions();
     println!("[+] scanning {} regions", regions.len());
-    let result = scan(&target, target.module.base, &regions, &patterns, args.arch);
+    let result = scan(
+        &target,
+        target.module.base,
+        target.module.size,
+        &regions,
+        &patterns,
+        args.arch,
+    );
 
     println!();
     println!("[+] found {}", result.found.len());
@@ -399,7 +473,7 @@ fn run() -> Result<(), String> {
     let ambiguous: Vec<_> = result
         .rows
         .iter()
-        .filter(|r| r.status == Status::Found && r.matches > 1)
+        .filter(|r| matches!(r.status, FindingStatus::FoundAmbiguous { .. }))
         .collect();
     if !ambiguous.is_empty() {
         println!(
@@ -609,6 +683,7 @@ struct JCand {
     aob: String,
     suffix: String,
     grade: String,
+    score: u32,
     bytes: usize,
     fixed: usize,
     wildcards: usize,
@@ -645,6 +720,7 @@ fn jcand(c: &SigCandidate) -> JCand {
         aob: c.aob.clone(),
         suffix: c.suffix.as_str().to_string(),
         grade: c.grade.letter().to_string(),
+        score: c.score,
         bytes: c.bytes_len,
         fixed: c.fixed,
         wildcards: c.wildcards,
@@ -701,8 +777,8 @@ fn print_candidate(tag: &str, c: &SigCandidate) {
         c.suffix.as_str()
     );
     println!(
-        "      {} bytes, {} fixed, {} wild, ratio {:.2}, reloc_safe {}",
-        c.bytes_len, c.fixed, c.wildcards, c.fixed_ratio, c.reloc_safe
+        "      score {}, {} bytes, {} fixed, {} wild, ratio {:.2}, reloc_safe {}",
+        c.score, c.bytes_len, c.fixed, c.wildcards, c.fixed_ratio, c.reloc_safe
     );
     for p in &c.per_version {
         let m = p
@@ -853,6 +929,7 @@ mod tests {
             aob: "48 8D 05 ?? ?? ?? ??".to_string(),
             suffix: Suffix::Ptr,
             grade: Grade::A,
+            score: 90,
             bytes_len: 7,
             fixed: 3,
             wildcards: 4,

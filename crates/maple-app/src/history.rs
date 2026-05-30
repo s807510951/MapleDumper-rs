@@ -232,23 +232,25 @@ pub fn list_scans(conn: &Connection) -> rusqlite::Result<Vec<ScanRow>> {
             found, not_found, total_matches, bytes, scan_ms
          FROM scans ORDER BY created_at DESC, id DESC",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(ScanRow {
-            id: r.get(0)?,
-            created_at: r.get(1)?,
-            module: r.get(2)?,
-            arch: r.get(3)?,
-            module_base: r.get(4)?,
-            build_hash: r.get(5)?,
-            build_version: r.get(6)?,
-            found: r.get(7)?,
-            not_found: r.get(8)?,
-            total_matches: r.get(9)?,
-            bytes: r.get(10)?,
-            scan_ms: r.get(11)?,
-        })
-    })?;
+    let rows = stmt.query_map([], map_scan_row)?;
     rows.collect()
+}
+
+fn map_scan_row(r: &rusqlite::Row) -> rusqlite::Result<ScanRow> {
+    Ok(ScanRow {
+        id: r.get(0)?,
+        created_at: r.get(1)?,
+        module: r.get(2)?,
+        arch: r.get(3)?,
+        module_base: r.get(4)?,
+        build_hash: r.get(5)?,
+        build_version: r.get(6)?,
+        found: r.get(7)?,
+        not_found: r.get(8)?,
+        total_matches: r.get(9)?,
+        bytes: r.get(10)?,
+        scan_ms: r.get(11)?,
+    })
 }
 
 pub fn group_by_build(conn: &Connection) -> rusqlite::Result<Vec<BuildGroup>> {
@@ -268,7 +270,13 @@ pub fn group_by_build(conn: &Connection) -> rusqlite::Result<Vec<BuildGroup>> {
 }
 
 pub fn scan_row(conn: &Connection, scan_id: i64) -> rusqlite::Result<Option<ScanRow>> {
-    Ok(list_scans(conn)?.into_iter().find(|s| s.id == scan_id))
+    let mut stmt = conn.prepare(
+        "SELECT id, created_at, module, arch, module_base, build_hash, build_version,
+            found, not_found, total_matches, bytes, scan_ms
+         FROM scans WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map([scan_id], map_scan_row)?;
+    rows.next().transpose()
 }
 
 pub fn findings(conn: &Connection, scan_id: i64) -> rusqlite::Result<Vec<FindingRow>> {
@@ -376,5 +384,15 @@ mod tests {
         delete_scan(&conn, id).unwrap();
         assert!(list_scans(&conn).unwrap().is_empty());
         assert!(findings(&conn, id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn scan_row_fetches_by_id() {
+        let mut conn = open_memory();
+        let id1 = insert_scan(&mut conn, &scan("AAAA"), &[finding("Foo", Some("0x10"))]).unwrap();
+        let id2 = insert_scan(&mut conn, &scan("BBBB"), &[finding("Bar", Some("0x20"))]).unwrap();
+        assert_eq!(scan_row(&conn, id1).unwrap().unwrap().build_hash, "AAAA");
+        assert_eq!(scan_row(&conn, id2).unwrap().unwrap().build_hash, "BBBB");
+        assert!(scan_row(&conn, 9999).unwrap().is_none());
     }
 }
