@@ -59,14 +59,14 @@ fn canonical(result: &ScanResult) -> String {
 }
 
 const EXPECTED: &str = "\
-Amb [globals] found (ambiguous) value=0x300 offset=false matches=2
-Bar [globals] found value=0x90 offset=false matches=1
-Baz [globals] found value=0x205 offset=false matches=1
-Foo [globals] found value=0x40 offset=false matches=1
-Hdr [globals] found value=0x123 offset=true matches=1
-Missing [globals] not found value=- offset=false matches=0
-Qux [globals] found value=0x10 offset=true matches=1
-Straddle [globals] found value=0x3FFFE offset=false matches=1
+Amb [uncategorized] found (ambiguous) value=0x300 offset=false matches=2
+Bar [uncategorized] found value=0x90 offset=false matches=1
+Baz [uncategorized] found value=0x205 offset=false matches=1
+Foo [uncategorized] found value=0x40 offset=false matches=1
+Hdr [uncategorized] found value=0x123 offset=true matches=1
+Missing [uncategorized] not found value=- offset=false matches=0
+Qux [uncategorized] found value=0x10 offset=true matches=1
+Straddle [uncategorized] found value=0x3FFFE offset=false matches=1
 total_matches=8
 findings=6
 ";

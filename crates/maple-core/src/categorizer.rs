@@ -98,21 +98,22 @@ const PACKETS: &[&str] = &[
 
 const ITEMS: &[&str] = &["HoveredItemPath"];
 
+pub const UNCATEGORIZED: &str = "uncategorized";
+
+const TABLE: &[(&str, &[&str])] = &[
+    ("functions", FUNCTIONS),
+    ("globals", GLOBALS),
+    ("offsets", OFFSETS),
+    ("packets", PACKETS),
+    ("items", ITEMS),
+];
+
 #[must_use]
 pub fn builtin_category(name: &str) -> &'static str {
-    if FUNCTIONS.contains(&name) {
-        "functions"
-    } else if GLOBALS.contains(&name) {
-        "globals"
-    } else if OFFSETS.contains(&name) {
-        "offsets"
-    } else if PACKETS.contains(&name) {
-        "packets"
-    } else if ITEMS.contains(&name) {
-        "items"
-    } else {
-        "globals"
-    }
+    TABLE
+        .iter()
+        .find(|(_, names)| names.contains(&name))
+        .map_or(UNCATEGORIZED, |&(category, _)| category)
 }
 
 #[cfg(test)]
@@ -129,7 +130,8 @@ mod tests {
     }
 
     #[test]
-    fn unknown_names_default_to_globals() {
-        assert_eq!(builtin_category("SomethingNew"), "globals");
+    fn unknown_names_are_flagged_not_hidden_in_globals() {
+        assert_eq!(builtin_category("SomethingNew"), UNCATEGORIZED);
+        assert_ne!(builtin_category("SomethingNew"), "globals");
     }
 }
