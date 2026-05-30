@@ -810,9 +810,14 @@ fn disassemble(hex: String, bits: u32, base: String) -> Vec<String> {
     let mut instr = Instruction::default();
     let mut out = Vec::new();
     while decoder.can_decode() {
+        let start_pos = decoder.position();
         decoder.decode_out(&mut instr);
         if instr.is_invalid() {
-            break;
+            if decoder.set_position(start_pos + 1).is_err() {
+                break;
+            }
+            decoder.set_ip(ip + (start_pos + 1) as u64);
+            continue;
         }
         let mut text = String::new();
         formatter.format(&instr, &mut text);

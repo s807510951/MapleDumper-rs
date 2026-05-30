@@ -239,9 +239,16 @@ fn scan_unit(
         if count.is_multiple_of(4096) && cancel.load(Ordering::Relaxed) {
             return Vec::new();
         }
+        let start_pos = decoder.position();
         decoder.decode_out(&mut instr);
         if instr.is_invalid() {
-            break;
+            // resync one byte past the start of the bad instruction so code after a data island is
+            // still scanned, instead of abandoning the rest of the chunk
+            if decoder.set_position(start_pos + 1).is_err() {
+                break;
+            }
+            decoder.set_ip(read_base + (start_pos + 1) as u64);
+            continue;
         }
         text.clear();
         formatter.format(&instr, &mut text);
@@ -408,5 +415,23 @@ mod tests {
         }];
         let cancel = AtomicBool::new(true);
         assert!(assembly_scan(&src, 0x3000, &regions, Arch::X64, &pat("push"), &cancel).is_empty());
+    }
+
+    #[test]
+    fn scan_resyncs_after_invalid_byte() {
+        let base = 0x1000usize;
+        // push rax, a byte that does not decode in 64-bit mode, then push rcx
+        let blob = vec![0x50, 0x06, 0x51];
+        let src = BufferSource::new(base, blob.clone());
+        let regions = [Region {
+            base,
+            size: blob.len(),
+        }];
+        let cancel = AtomicBool::new(false);
+        let hits = assembly_scan(&src, base, &regions, Arch::X64, &pat("push rcx"), &cancel);
+        assert_eq!(
+            hits.iter().map(|h| h.address).collect::<Vec<_>>(),
+            vec![0x1002]
+        );
     }
 }
