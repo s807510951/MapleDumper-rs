@@ -2385,6 +2385,55 @@ button.btn-ico:hover {
   color: var(--amber);
   font-size: 12px;
 }
+.sig-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 4px 0 8px;
+}
+.sig-sc {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--t2);
+}
+.sig-sc-l {
+  min-width: 58px;
+}
+.sig-sc-bar {
+  width: 56px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--inset);
+  overflow: hidden;
+}
+.sig-sc-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--blue), var(--violet));
+}
+.sig-sc-v {
+  min-width: 22px;
+  text-align: right;
+  color: var(--t1);
+}
+.sig-sc.final .sig-sc-l {
+  min-width: 0;
+  color: var(--t1);
+  font-weight: 600;
+}
+.sig-reasons {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  color: var(--t2);
+  font-size: 12px;
+}
+[dir="rtl"] .sig-reasons {
+  padding-left: 0;
+  padding-right: 18px;
+}
 .sig-jsonview {
   margin: 0;
   padding: 14px;

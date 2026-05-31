@@ -243,12 +243,40 @@ function gradeDesc(letter) {
   return t("sig.grade" + String(letter).toUpperCase());
 }
 
+const SIG_SUBSCORES = [
+  ["uniqueness", "sig.scUniq"],
+  ["stability", "sig.scStab"],
+  ["entropy", "sig.scEntropy"],
+  ["semantic", "sig.scSemantic"],
+  ["resolver_confidence", "sig.scResolver"],
+  ["cross_build", "sig.scCross"],
+];
+
+function sigSimPct(v) {
+  return v == null ? "-" : Math.round(v * 100) + "%";
+}
+
+function sigScoresHtml(s) {
+  if (!s) return "";
+  const bar = (key, label) => {
+    const v = Math.max(0, Math.min(100, s[key] | 0));
+    return `<span class="sig-sc" title="${escAttr(label + " " + v)}"><span class="sig-sc-l">${esc(label)}</span><span class="sig-sc-bar"><span class="sig-sc-fill" style="width:${esc(v)}%"></span></span><span class="sig-sc-v mono">${esc(v)}</span></span>`;
+  };
+  const chips = SIG_SUBSCORES.map(([key, lk]) => bar(key, t(lk))).join("");
+  return `<div class="sig-section-h">${esc(t("sig.scores"))}</div><div class="sig-scores">${chips}<span class="sig-sc final"><span class="sig-sc-l">${esc(t("sig.scFinal"))}</span><span class="sig-sc-v mono">${esc(s.final_score | 0)}</span></span></div>`;
+}
+
+function sigReasonsHtml(reasons) {
+  if (!reasons || !reasons.length) return "";
+  return `<div class="sig-section-h">${esc(t("sig.reasons"))}</div><ul class="sig-reasons">${reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
+}
+
 function sigCandCard(c, tag, primary) {
   const grade = c.grade.toLowerCase();
   const rows = c.per_version
     .map(
       (p) =>
-        `<tr><td class="d-name">${esc(p.label)}</td><td class="mono d-addr">${esc(p.match_rva || "-")}</td><td class="mono d-addr">${esc(p.resolved_target_rva || "-")}</td><td>${esc(p.target_type || "-")}</td></tr>`,
+        `<tr><td class="d-name">${esc(p.label)}</td><td class="mono d-addr">${esc(p.match_rva || "-")}</td><td class="mono d-addr">${esc(p.resolved_target_rva || "-")}</td><td>${esc(p.target_type || "-")}</td><td class="mono">${esc(sigSimPct(p.fingerprint_similarity))}</td></tr>`,
     )
     .join("");
   const diags = c.diags.length
@@ -265,7 +293,9 @@ function sigCandCard(c, tag, primary) {
       </span>
     </div>
     <div class="sig-stats muted">${t("sig.bytesFixed", { bytes: c.bytes, fixed: c.fixed, wild: c.wildcards, ratio: c.fixed_ratio.toFixed(2) })}${c.reloc_safe ? "" : " · ⚠ reloc"}</div>
-    <table class="grid-table sig-pv"><thead><tr><th>${esc(t("sig.colVersion"))}</th><th>${esc(t("sig.colMatch"))}</th><th>${esc(t("sig.colTarget"))}</th><th>${esc(t("col.type"))}</th></tr></thead><tbody>${rows}</tbody></table>
+    ${sigScoresHtml(c.scores)}
+    ${sigReasonsHtml(c.reasons)}
+    <table class="grid-table sig-pv"><thead><tr><th>${esc(t("sig.colVersion"))}</th><th>${esc(t("sig.colMatch"))}</th><th>${esc(t("sig.colTarget"))}</th><th>${esc(t("col.type"))}</th><th>${esc(t("sig.colSim"))}</th></tr></thead><tbody>${rows}</tbody></table>
     ${diags}
   </div>`;
 }
