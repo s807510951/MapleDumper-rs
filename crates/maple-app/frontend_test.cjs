@@ -78,9 +78,9 @@ const driver = `
     arch: "x64", unique_builds: 2,
     inputs: [ { label: "a.exe", packed: false, reasons: [] }, { label: "b.exe", packed: true, reasons: ["x"] } ],
     duplicate_groups: [ ["DEADBEEFCAFE0001", ["a.exe", "c.exe"]] ],
-    chosen: { aob: "E8 ?? ?? ?? ?? 48 83 C4 ??", suffix: "_CALL", grade: "A", bytes: 14, fixed: 5, wildcards: 9, fixed_ratio: 0.36, reloc_safe: true, per_version: [ { label: "a.exe", match_rva: "0x23B64", resolved_target_rva: "0x24190", target_type: "code" } ], diags: [] },
-    alternates: [ { aob: "48 89 5C 24 ??", suffix: "", grade: "B", bytes: 5, fixed: 4, wildcards: 1, fixed_ratio: 0.8, reloc_safe: true, per_version: [ { label: "a.exe", match_rva: "0x24190", resolved_target_rva: null, target_type: null } ], diags: [] } ],
-    rejected: [ { aob: "90", suffix: "", grade: "F", bytes: 1, fixed: 1, wildcards: 0, fixed_ratio: 1, reloc_safe: true, per_version: [], diags: ["too few fixed bytes (1)"] } ],
+    chosen: { aob: "E8 ?? ?? ?? ?? 48 83 C4 ??", suffix: "_CALL", grade: "A", score: 88, bytes: 14, fixed: 5, wildcards: 9, fixed_ratio: 0.36, reloc_safe: true, scores: { uniqueness: 91, stability: 80, entropy: 74, semantic: 85, resolver_confidence: 90, cross_build: 77, final_score: 88 }, reasons: ["validated branch to code", "callee fingerprint stable across builds"], per_version: [ { label: "a.exe", match_rva: "0x23B64", resolved_target_rva: "0x24190", target_type: "code", fingerprint_similarity: 0.97 } ], diags: [] },
+    alternates: [ { aob: "48 89 5C 24 ??", suffix: "", grade: "B", score: 70, bytes: 5, fixed: 4, wildcards: 1, fixed_ratio: 0.8, reloc_safe: true, scores: { uniqueness: 72, stability: 88, entropy: 60, semantic: 40, resolver_confidence: 55, cross_build: 50, final_score: 70 }, reasons: ["reloc-safe, not content-validated"], per_version: [ { label: "a.exe", match_rva: "0x24190", resolved_target_rva: null, target_type: null, fingerprint_similarity: null } ], diags: [] } ],
+    rejected: [ { aob: "90", suffix: "", grade: "F", score: 0, bytes: 1, fixed: 1, wildcards: 0, fixed_ratio: 1, reloc_safe: true, scores: { uniqueness: 0, stability: 0, entropy: 0, semantic: 0, resolver_confidence: 0, cross_build: 0, final_score: 0 }, reasons: [], per_version: [], diags: ["too few fixed bytes (1)"] } ],
     diagnostics: ["packed input b.exe: high entropy 7.90 in .text"],
     holdout: [
       { held_out: "a.exe", generated: true, matched: true },
@@ -148,6 +148,11 @@ const rep = sandbox.__reportHtml || "";
 check(rep.includes("E8 ?? ?? ?? ??") && rep.includes("_CALL"), "chosen AOB/suffix missing");
 check(rep.includes(">A<"), "chosen grade badge missing");
 check(rep.includes("0x24190"), "resolved target RVA missing from per-version table");
+check(rep.includes("Score breakdown") && rep.includes("sig-sc-fill"), "score breakdown bars missing");
+check(rep.includes("Unique") && rep.includes(">91<") && rep.includes("Final") && rep.includes(">88<"), "sub-score values missing");
+check(rep.includes("Why this grade") && rep.includes("callee fingerprint stable across builds"), "candidate reasons missing");
+check(rep.includes("Fingerprint") && rep.includes("97%"), "fingerprint-similarity column/value missing");
+check(rep.includes(">-<"), "null fingerprint similarity should render as -");
 check(rep.includes("Alternates") && rep.includes("Rejected"), "alternates/rejected sections missing");
 check(rep.includes("Duplicate builds") && rep.includes("DEADBEEFCAFE0001"), "duplicate-build section missing");
 check(rep.includes("Diagnostics"), "diagnostics section missing");
