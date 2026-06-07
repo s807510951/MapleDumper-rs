@@ -291,11 +291,72 @@ mod encoding;
 mod identity;
 pub use identity::*;
 
+/// Mint a byte signature unique within a SINGLE build at `rva`, masking operand and relocated bytes
+/// the same way the cross-build generator does, and growing the window instruction by instruction
+/// until the pattern matches exactly once in that build. This is how a relocation fallback hands back
+/// a usable AOB for a recompiled build: the original cross-build AOB no longer matches there, but once
+/// the function has been relocated, its own bytes in that build still yield a fresh unique pattern.
+/// `None` if no operand-masked window up to `opts.max_len` is unique (a function whose bytes recur, or
+/// an unreadable site).
+fn single_build_aob(img: &ImageInput, rva: usize, opts: &SigOptions) -> Option<String> {
+    let cache = CodeCache::build(img);
+    let max_instrs = opts.max_len / 2 + 8;
+    let window = read_at(img.source, img.base, rva, opts.max_len + 16);
+    if window.is_empty() {
+        return None;
+    }
+    let instrs = decode_masked(&window, img.arch, img.base, rva, img.reloc, max_instrs);
+
+    let mut acc = 0usize;
+    let mut lens: Vec<usize> = Vec::new();
+    for im in &instrs {
+        acc += im.len;
+        if acc > opts.max_len || acc > window.len() {
+            break;
+        }
+        lens.push(acc);
+    }
+
+    for &len in &lens {
+        let mut fixed = vec![true; len];
+        let mut operand = vec![false; len];
+        let mut pos = 0usize;
+        for im in &instrs {
+            if pos >= len {
+                break;
+            }
+            for k in 0..im.len {
+                if pos + k < len {
+                    fixed[pos + k] = im.fixed[k];
+                    operand[pos + k] = im.operand[k];
+                }
+            }
+            pos += im.len;
+        }
+        let fixed_n = fixed.iter().filter(|&&f| f).count();
+        let meaningful = (0..len).filter(|&k| fixed[k] && !operand[k]).count();
+        if fixed_n < opts.min_fixed
+            || meaningful == 0
+            || (fixed_n as f64 / len as f64) < opts.min_fixed_ratio
+        {
+            continue;
+        }
+        let Some(pat) = compile(&window[..len], &fixed) else {
+            continue;
+        };
+        if cache.locate(&pat).0 == 1 {
+            return Some(aob_of(&window[..len], &fixed));
+        }
+    }
+    None
+}
+
 fn string_anchor_candidate(
     images: &[ImageInput],
     required: &[usize],
     ref_idx: usize,
     ref_rva: u64,
+    opts: &SigOptions,
 ) -> Option<SigCandidate> {
     let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
     let anchor = make_string_anchor(&images[ref_idx], entry)?;
@@ -313,6 +374,9 @@ fn string_anchor_candidate(
             resolved_target_rva: Some(resolved),
             target_kind: Some(TargetKind::Code),
             fingerprint_similarity: None,
+            // The string survives recompiles that move the bytes, so each build needs its own AOB,
+            // minted at the function the string resolves to there.
+            aob: single_build_aob(&images[idx], resolved as usize, opts),
         });
     }
     for k in 1..idents.len() {
@@ -385,6 +449,7 @@ fn fingerprint_relocate(
     required: &[usize],
     ref_idx: usize,
     ref_rva: u64,
+    opts: &SigOptions,
 ) -> Option<SigCandidate> {
     if !matches!(images[ref_idx].arch, Arch::X86) {
         return None;
@@ -415,6 +480,7 @@ fn fingerprint_relocate(
             resolved_target_rva: Some(rva as u64),
             target_kind: Some(TargetKind::Code),
             fingerprint_similarity: None,
+            aob: single_build_aob(img, rva, opts),
         });
     }
     // Mutual consistency: every build's chosen function must look like the reference's. The minimum
@@ -481,6 +547,7 @@ fn encoding_relocate(
     required: &[usize],
     ref_idx: usize,
     ref_rva: u64,
+    opts: &SigOptions,
 ) -> Option<SigCandidate> {
     if !matches!(images[ref_idx].arch, Arch::X86) {
         return None;
@@ -509,6 +576,7 @@ fn encoding_relocate(
             resolved_target_rva: Some(rva as u64),
             target_kind: Some(TargetKind::Code),
             fingerprint_similarity: None,
+            aob: single_build_aob(img, rva, opts),
         });
     }
     // Mutual consistency: every build's relocated window must look like the reference build's, so one
@@ -676,6 +744,8 @@ fn finalize(
             resolved_target_rva,
             target_kind,
             fingerprint_similarity: None,
+            // The byte path's own `aob` already matches every build, so no per-build AOB is needed.
+            aob: None,
         });
     }
 
@@ -1201,11 +1271,16 @@ pub fn generate_with_progress(
         // the exact template instance the mnemonic fingerprint only ties on; then the fuzzier mnemonic
         // fingerprint as a last resort. None emit a byte/string the resolver can re-scan for, so all
         // are capped below the byte anchors.
-        if let Some(anchor_cand) = string_anchor_candidate(images, &required, ref_idx, ref_rva) {
+        if let Some(anchor_cand) =
+            string_anchor_candidate(images, &required, ref_idx, ref_rva, opts)
+        {
             pool.push(anchor_cand);
-        } else if let Some(enc_cand) = encoding_relocate(images, &required, ref_idx, ref_rva) {
+        } else if let Some(enc_cand) = encoding_relocate(images, &required, ref_idx, ref_rva, opts)
+        {
             pool.push(enc_cand);
-        } else if let Some(fp_cand) = fingerprint_relocate(images, &required, ref_idx, ref_rva) {
+        } else if let Some(fp_cand) =
+            fingerprint_relocate(images, &required, ref_idx, ref_rva, opts)
+        {
             pool.push(fp_cand);
         }
     }
@@ -1827,7 +1902,8 @@ mod tests {
         // evidence, so it is capped and the reason is recorded.
         let src = string_build();
         let img = string_img(&src, 1);
-        let cand = string_anchor_candidate(&[img], &[0], 0, 0x100).expect("a string anchor");
+        let cand = string_anchor_candidate(&[img], &[0], 0, 0x100, &SigOptions::default())
+            .expect("a string anchor");
         assert!(cand.aob.starts_with("@string="));
         assert_ne!(cand.grade, Grade::A);
         assert!(cand.reasons.iter().any(|r| r.contains("one build")));
@@ -1839,13 +1915,89 @@ mod tests {
         // both, so it earns A and carries per-build similarity evidence.
         let a = string_build();
         let b = string_build();
-        let cand =
-            string_anchor_candidate(&[string_img(&a, 1), string_img(&b, 2)], &[0, 1], 0, 0x100)
-                .expect("a string anchor");
+        let cand = string_anchor_candidate(
+            &[string_img(&a, 1), string_img(&b, 2)],
+            &[0, 1],
+            0,
+            0x100,
+            &SigOptions::default(),
+        )
+        .expect("a string anchor");
         assert_eq!(cand.grade, Grade::A);
         assert_eq!(cand.per_version.len(), 2);
         assert_eq!(cand.per_version[1].fingerprint_similarity, Some(1.0));
         assert!(cand.scores.cross_build >= 95);
+    }
+
+    #[test]
+    fn single_build_aob_mints_a_unique_operand_masked_pattern() {
+        // A function with a volatile call/lea operand: the minted AOB masks the operand bytes and still
+        // matches exactly once in the build.
+        let src = BufferSource::new(0x1000, blob(0x1234, 0xAB));
+        let image = img("x", &src, 0x1000, 49);
+        let aob = single_build_aob(&image, 0, &SigOptions::default()).expect("an aob");
+        assert!(
+            aob.contains("??"),
+            "the volatile operand should be wildcarded: {aob}"
+        );
+        let sig = crate::pattern::try_signature_from_aob(&aob).unwrap();
+        let pat = CompiledPattern::new(&sig).unwrap();
+        assert_eq!(
+            CodeCache::build(&image).locate(&pat).0,
+            1,
+            "the minted AOB must be unique in the build"
+        );
+    }
+
+    #[test]
+    fn string_anchor_mints_a_fresh_per_build_aob_when_bytes_differ() {
+        // Two builds: the same function references the same unique string, but its bytes differ (a
+        // recompile inserts `xor eax,eax`). A single cross-build byte AOB cannot match both, but the
+        // string anchor relocates the function in each build and mints a build-specific AOB that
+        // uniquely matches there. This is the "new AOB for the recompiled build" path.
+        let mut a = vec![0u8; 0x200];
+        a[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        a[0x100..0x103].copy_from_slice(&[0x55, 0x8B, 0xEC]); // push ebp ; mov ebp,esp
+        a[0x103] = 0x68; // push imm32 (string address)
+        a[0x104..0x108].copy_from_slice(&0x1010u32.to_le_bytes());
+        a[0x108] = 0xC3; // ret
+        let mut b = vec![0u8; 0x200];
+        b[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        b[0x100..0x105].copy_from_slice(&[0x55, 0x8B, 0xEC, 0x33, 0xC0]); // + xor eax,eax
+        b[0x105] = 0x68;
+        b[0x106..0x10A].copy_from_slice(&0x1010u32.to_le_bytes());
+        b[0x10A] = 0xC3;
+        let sa = BufferSource::new(0x1000, a);
+        let sb = BufferSource::new(0x1000, b);
+        let cand = string_anchor_candidate(
+            &[string_img(&sa, 1), string_img(&sb, 2)],
+            &[0, 1],
+            0,
+            0x100,
+            &SigOptions::default(),
+        )
+        .expect("a string anchor");
+        let aob_a = cand.per_version[0]
+            .aob
+            .clone()
+            .expect("per-build AOB for build A");
+        let aob_b = cand.per_version[1]
+            .aob
+            .clone()
+            .expect("per-build AOB for build B");
+        assert_ne!(aob_a, aob_b, "a recompiled build must get its own AOB");
+        let unique_in = |aob: &str, src: &BufferSource| {
+            let sig = crate::pattern::try_signature_from_aob(aob).unwrap();
+            let pat = CompiledPattern::new(&sig).unwrap();
+            CodeCache::build(&string_img(src, 9)).locate(&pat).0
+        };
+        assert_eq!(unique_in(&aob_a, &sa), 1, "A's AOB matches A uniquely");
+        assert_eq!(unique_in(&aob_b, &sb), 1, "B's AOB matches B uniquely");
+        assert_eq!(
+            unique_in(&aob_a, &sb),
+            0,
+            "A's AOB must NOT match the recompiled build B"
+        );
     }
 
     #[test]
@@ -2589,7 +2741,7 @@ mod tests {
         let ia = fp_input("a", &a, 1);
         let ib = fp_input("b", &b, 2);
         assert!(
-            fingerprint_relocate(&[ia, ib], &[0, 1], 0, 0x40).is_none(),
+            fingerprint_relocate(&[ia, ib], &[0, 1], 0, 0x40, &SigOptions::default()).is_none(),
             "a 1-instruction function is too thin to relocate by fingerprint"
         );
     }
@@ -2792,8 +2944,14 @@ mod tests {
         );
 
         // End to end: encoding_relocate bridges v83+v84 with per-build RVAs, and declines v83+v88.
-        let bridged = encoding_relocate(&[v83.clone(), v84.clone()], &[0, 1], 0, 0x4D6D95)
-            .expect("encoding_relocate should bridge v83->v84");
+        let bridged = encoding_relocate(
+            &[v83.clone(), v84.clone()],
+            &[0, 1],
+            0,
+            0x4D6D95,
+            &SigOptions::default(),
+        )
+        .expect("encoding_relocate should bridge v83->v84");
         assert!(bridged.aob.starts_with("@encoding="), "got {}", bridged.aob);
         assert!(
             bridged.grade.rank() >= Grade::B.rank(),
@@ -2802,8 +2960,121 @@ mod tests {
         assert_eq!(bridged.per_version[0].resolved_target_rva, Some(0x4D6D95));
         assert_eq!(bridged.per_version[1].resolved_target_rva, Some(0x4DE0BA));
         assert!(
-            encoding_relocate(&[v83, v88], &[0, 1], 0, 0x4D6D95).is_none(),
+            encoding_relocate(&[v83, v88], &[0, 1], 0, 0x4D6D95, &SigOptions::default()).is_none(),
             "encoding_relocate must decline across a recompile it cannot bridge"
+        );
+    }
+
+    // The headline capability on the real corpus (run with `--ignored`): take a function known in v83
+    // by a unique string it references, and show that across the v83 -> v88 RECOMPILE the original byte
+    // AOB no longer applies but the string anchor relocates the function in v88 and mints a fresh AOB
+    // that uniquely matches v88. Self-discovering: it walks v83 prologues until it finds a string anchor
+    // that resolves uniquely in both builds, then asserts the v88 AOB is real and unique.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn string_anchor_mints_a_working_aob_across_a_real_recompile() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let p83 = dir.join("GMS_v83.1_U_DEVM.exe");
+        let p88 = dir.join("GMS_v88.1_U_DEVM.exe");
+        if !p83.exists() || !p88.exists() {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i83 = FileImage::open(&p83).expect("open v83");
+        let i88 = FileImage::open(&p88).expect("open v88");
+        let v83 = mk("v83", &i83);
+        let v88 = mk("v88", &i88);
+
+        let uniq = |aob: &str, img: &ImageInput| -> usize {
+            crate::pattern::try_signature_from_aob(aob)
+                .ok()
+                .and_then(|s| CompiledPattern::new(&s))
+                .map(|p| CodeCache::build(img).locate(&p).0)
+                .unwrap_or(0)
+        };
+
+        let region = v83.code_regions[0];
+        let code = read_region(v83.source, region.base, region.size);
+        let mut attempts = 0;
+        let mut shown = 0;
+        let mut w = 0;
+        while w + 3 <= code.len() {
+            if code[w..w + 3] != [0x55, 0x8B, 0xEC] {
+                w += 1;
+                continue;
+            }
+            let fn_rva = (region.base - v83.base) + w;
+            w += 3;
+            let Some(anchor) = make_string_anchor(&v83, fn_rva) else {
+                continue;
+            };
+            if resolve_string_anchor(&v83, &anchor).is_none()
+                || resolve_string_anchor(&v88, &anchor).is_none()
+            {
+                continue;
+            }
+            attempts += 1;
+            let Some(cand) = string_anchor_candidate(
+                &[v83.clone(), v88.clone()],
+                &[0, 1],
+                0,
+                fn_rva as u64,
+                &SigOptions::default(),
+            ) else {
+                continue;
+            };
+            let (Some(aob83), Some(aob88)) = (
+                cand.per_version[0].aob.clone(),
+                cand.per_version[1].aob.clone(),
+            ) else {
+                continue;
+            };
+            let m88 = uniq(&aob88, &v88);
+            eprintln!(
+                "@string={} | v83 {} (x{} in v83) | v88 {} (x{} in v88); v83-AOB in v88 x{}",
+                anchor.text,
+                aob83,
+                uniq(&aob83, &v83),
+                aob88,
+                m88,
+                uniq(&aob83, &v88),
+            );
+            // The freshly minted v88 AOB must uniquely match the recompiled build.
+            assert_eq!(
+                m88, 1,
+                "the minted v88 AOB must uniquely match the recompiled build"
+            );
+            shown += 1;
+            if shown >= 3 {
+                break;
+            }
+            if attempts >= 200 {
+                break;
+            }
+        }
+        assert!(
+            shown > 0,
+            "expected at least one string anchor that bridges v83 -> v88"
         );
     }
 

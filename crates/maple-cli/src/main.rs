@@ -1117,6 +1117,9 @@ struct JPer {
     resolved_target_rva: Option<String>,
     target_type: Option<String>,
     fingerprint_similarity: Option<f64>,
+    /// A fresh byte signature minted for this build at the relocated address, when the cross-build AOB
+    /// does not apply (a recompiled build located by string/encoding/fingerprint anchor).
+    aob: Option<String>,
 }
 #[derive(Serialize)]
 struct JScores {
@@ -1219,6 +1222,7 @@ fn jcand(c: &SigCandidate) -> JCand {
                 resolved_target_rva: p.resolved_target_rva.map(|v| format!("0x{v:X}")),
                 target_type: p.target_kind.map(|k| kind_str(k).to_string()),
                 fingerprint_similarity: p.fingerprint_similarity,
+                aob: p.aob.clone(),
             })
             .collect(),
         diags: c.diags.iter().map(|d| d.to_string()).collect(),
@@ -1726,6 +1730,7 @@ mod tests {
                 resolved_target_rva: Some(0x1000),
                 target_kind: Some(TargetKind::Code),
                 fingerprint_similarity: Some(1.0),
+                aob: None,
             }],
             diags: Vec::new(),
         };
