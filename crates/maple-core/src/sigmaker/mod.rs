@@ -603,6 +603,66 @@ fn fingerprint_relocate(
     })
 }
 
+// Last-resort shortlist: how similar a window must be to make the list, and how many to list. The
+// floor is deliberately loose (this only runs once every confident path has already declined), and the
+// cap keeps the list short enough to disambiguate by hand.
+const SHORTLIST_FLOOR: f64 = 0.65;
+const SHORTLIST_K: usize = 10;
+
+/// When no anchor pinned the function uniquely, build a per-build shortlist of the structural
+/// near-duplicates it belongs to, each with a freshly minted AOB. This is the honest fallback for a
+/// degenerate, anchor-less target: it cannot say which window is THE function, but it can hand back the
+/// small family to disambiguate manually or at runtime, instead of returning nothing. x86 only; heavy
+/// (a full instruction-boundary scan per build), so it runs only after every confident path declined.
+fn relocation_shortlists(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+    opts: &SigOptions,
+) -> Vec<Shortlist> {
+    if !matches!(images[ref_idx].arch, Arch::X86) {
+        return Vec::new();
+    }
+    let ref_entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let reference = fn_identity(&images[ref_idx], ref_entry);
+    // Too thin to even shortlist: a handful of generic instructions would match half the image.
+    if reference.instr_count < 6 {
+        return Vec::new();
+    }
+    // Family members share a long template body, so the default window cannot tell them apart; allow a
+    // longer signature here so the minted AOB can reach the divergent tail that disambiguates each one.
+    let aob_opts = SigOptions {
+        max_len: opts.max_len.max(256),
+        min_fixed: opts.min_fixed,
+        min_fixed_ratio: opts.min_fixed_ratio,
+    };
+    let mut out = Vec::new();
+    for &idx in required {
+        if idx == ref_idx {
+            continue; // the reference build already has the function at the known site
+        }
+        let top =
+            identity::fingerprint_topk(&images[idx], &reference, SHORTLIST_K, SHORTLIST_FLOOR);
+        if top.is_empty() {
+            continue;
+        }
+        let entries = top
+            .into_iter()
+            .map(|(rva, similarity)| ShortlistEntry {
+                rva: rva as u64,
+                similarity,
+                aob: single_build_aob(&images[idx], rva, &aob_opts),
+            })
+            .collect();
+        out.push(Shortlist {
+            label: images[idx].label.clone(),
+            entries,
+        });
+    }
+    out
+}
+
 // Thresholds for the encoding-fingerprint relocation. The signal is a near-exact encoding match (it
 // keeps registers and operand sizes and masks only the relocatable values), so the bar is high: the
 // best window must clear ENC_MIN_SIMILARITY, be the SOLE window at the top score (no tie), and lead
@@ -1184,6 +1244,7 @@ pub fn generate_with_progress(
         chosen: None,
         alternates: Vec::new(),
         rejected: Vec::new(),
+        shortlists: Vec::new(),
         diagnostics,
     };
 
@@ -1390,7 +1451,9 @@ pub fn generate_with_progress(
     });
     let chosen = (!pool.is_empty()).then(|| pool.remove(0));
     let alternates = pool;
-    if chosen.is_none() {
+    // When nothing could be pinned, fall back to a per-build shortlist of the structural family so the
+    // user gets candidates to disambiguate instead of an empty result.
+    let shortlists = if chosen.is_none() {
         for &(idx, rva) in &aob_found {
             diagnostics.push(Diag::FoundInBuild {
                 label: images[idx].label.clone(),
@@ -1398,7 +1461,10 @@ pub fn generate_with_progress(
             });
         }
         diagnostics.push(Diag::NotUnique);
-    }
+        relocation_shortlists(images, &required, ref_idx, ref_rva, opts)
+    } else {
+        Vec::new()
+    };
 
     SigReport {
         arch,
@@ -1408,6 +1474,7 @@ pub fn generate_with_progress(
         chosen,
         alternates,
         rejected,
+        shortlists,
         diagnostics,
     }
 }
@@ -2084,6 +2151,82 @@ mod tests {
             0,
             "A's AOB must NOT match the recompiled build B"
         );
+    }
+
+    // An x86 ImageInput over a raw buffer, for the shortlist test.
+    fn x86_img<'a>(
+        label: &str,
+        src: &'a BufferSource,
+        base: usize,
+        size: usize,
+        hash: u64,
+    ) -> ImageInput<'a> {
+        ImageInput {
+            label: label.to_string(),
+            source: src,
+            base,
+            size,
+            code_regions: vec![Region { base, size }],
+            regions: vec![Region { base, size }],
+            import: None,
+            arch: Arch::X86,
+            code_hash: hash,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        }
+    }
+
+    #[test]
+    fn a_degenerate_repeated_function_yields_a_per_build_shortlist() {
+        // A distinctive function repeated three times in each build: no unique byte AOB, no string or
+        // import anchor, and the encoding/fingerprint paths tie three ways, so every confident path
+        // declines. Instead of nothing, the engine returns a shortlist of the family for the other
+        // build, the honest fallback for an anchor-less, structurally-degenerate target.
+        let body = [
+            0xB8, 0x11, 0x22, 0x33, 0x44, // mov eax, imm32
+            0xBB, 0x55, 0x66, 0x77, 0x88, // mov ebx, imm32
+            0x01, 0xD8, // add eax, ebx
+            0x31, 0xC9, // xor ecx, ecx
+            0x83, 0xC0, 0x10, // add eax, 0x10
+            0xC3, // ret
+        ];
+        let image = |pad: u8| {
+            let mut v = vec![0x90u8; 0x300];
+            for &at in &[0x40usize, 0x120, 0x200] {
+                v[at..at + body.len()].copy_from_slice(&body);
+            }
+            v[0x2F0] = pad; // differ so the two builds are distinct required inputs
+            v
+        };
+        let a = BufferSource::new(0x1000, image(0xAA));
+        let b = BufferSource::new(0x1000, image(0xBB));
+        let report = generate(
+            &[
+                x86_img("a", &a, 0x1000, 0x300, 1),
+                x86_img("b", &b, 0x1000, 0x300, 2),
+            ],
+            &TargetSpec::Ref {
+                image: 0,
+                rva: 0x40,
+            },
+            &SigOptions::default(),
+        );
+        assert!(
+            report.chosen.is_none(),
+            "an ambiguous repeated function cannot be pinned"
+        );
+        let sl = report
+            .shortlists
+            .iter()
+            .find(|s| s.label == "b")
+            .expect("a shortlist for build b");
+        assert!(
+            sl.entries.len() >= 2,
+            "the degenerate family should list multiple candidates, got {}",
+            sl.entries.len()
+        );
+        assert!(sl.entries.iter().all(|e| e.similarity >= 0.65));
     }
 
     #[test]
@@ -3232,6 +3375,70 @@ mod tests {
             CodeCache::build(&v88).locate(&pat).0,
             1,
             "the minted v88 AOB must uniquely match v88"
+        );
+    }
+
+    // The shortlist fallback on the real degenerate target (run with `--ignored`). The AOB matches v84
+    // but is recompiled away by v88, and the function is anchor-less, so no confident path can relocate
+    // it. The engine returns a v88 shortlist of the structural family it belongs to, each with a minted
+    // AOB, for manual or runtime disambiguation, instead of nothing. Records the honest candidate list.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn degenerate_target_yields_a_v88_shortlist_on_real_gms() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let p84 = dir.join("GMS_v84.1_U_DEVM.exe");
+        let p88 = dir.join("GMS_v88.1_U_DEVM.exe");
+        if !p84.exists() || !p88.exists() {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i84 = FileImage::open(&p84).expect("open v84");
+        let i88 = FileImage::open(&p88).expect("open v88");
+        let report = generate(
+            &[mk("v84", &i84), mk("v88", &i88)],
+            &TargetSpec::Aob("B3 ?? 83 EC ?? 8B FC 8D 75 ??".to_string()),
+            &SigOptions::default(),
+        );
+        // No confident byte/anchor signature exists across v84+v88 for this target.
+        assert!(
+            report.chosen.is_none(),
+            "the anchor-less recompiled target must not yield a confident signature"
+        );
+        let sl = report
+            .shortlists
+            .iter()
+            .find(|s| s.label == "v88")
+            .expect("a v88 shortlist for the degenerate target");
+        eprintln!(
+            "v88 shortlist for the degenerate target: {} candidates",
+            sl.entries.len()
+        );
+        for e in &sl.entries {
+            eprintln!("  0x{:X} sim {:.3} aob {:?}", e.rva, e.similarity, e.aob);
+        }
+        assert!(
+            !sl.entries.is_empty(),
+            "the shortlist should offer at least one v88 candidate"
         );
     }
 

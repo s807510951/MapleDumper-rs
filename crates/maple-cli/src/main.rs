@@ -1177,6 +1177,17 @@ struct JHold {
     matched: bool,
 }
 #[derive(Serialize)]
+struct JShortEntry {
+    rva: String,
+    similarity: f64,
+    aob: Option<String>,
+}
+#[derive(Serialize)]
+struct JShortlist {
+    label: String,
+    candidates: Vec<JShortEntry>,
+}
+#[derive(Serialize)]
 struct JReport {
     arch: String,
     unique_builds: usize,
@@ -1189,6 +1200,7 @@ struct JReport {
     negative_summary: JNegSummary,
     holdout: Vec<JHold>,
     string_anchor: Option<String>,
+    shortlists: Vec<JShortlist>,
     diagnostics: Vec<String>,
 }
 
@@ -1283,6 +1295,22 @@ fn json_report(
             })
             .collect(),
         string_anchor: string_anchor.map(str::to_string),
+        shortlists: r
+            .shortlists
+            .iter()
+            .map(|s| JShortlist {
+                label: s.label.clone(),
+                candidates: s
+                    .entries
+                    .iter()
+                    .map(|e| JShortEntry {
+                        rva: format!("0x{:X}", e.rva),
+                        similarity: e.similarity,
+                        aob: e.aob.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
     };
     serde_json::to_string_pretty(&report).unwrap_or_default()
@@ -1742,6 +1770,7 @@ mod tests {
             chosen: Some(cand.clone()),
             alternates: vec![cand.clone()],
             rejected: vec![cand],
+            shortlists: Vec::new(),
             diagnostics: Vec::new(),
         };
         let json = json_report(&report, &[], 0, &[], None);
@@ -1773,6 +1802,7 @@ mod tests {
             chosen: None,
             alternates: Vec::new(),
             rejected: Vec::new(),
+            shortlists: Vec::new(),
             diagnostics: Vec::new(),
         };
         let hits = [

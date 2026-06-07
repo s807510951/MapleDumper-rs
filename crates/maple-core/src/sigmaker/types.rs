@@ -320,6 +320,26 @@ impl BuildProfile {
     }
 }
 
+/// One candidate function in a build that could not be uniquely relocated. Part of a [`Shortlist`].
+#[derive(Clone, Debug)]
+pub struct ShortlistEntry {
+    pub rva: u64,
+    /// Structural similarity to the reference function, 0.0..=1.0.
+    pub similarity: f64,
+    /// A byte signature minted at this candidate in its build, when one could be made.
+    pub aob: Option<String>,
+}
+
+/// A best-effort list of candidate functions in one build, emitted when a function could not be
+/// confidently relocated (no byte/string/import/encoding anchor pinned it uniquely) but a family of
+/// structurally near-equal functions exists. The caller disambiguates manually or at runtime; this is
+/// never a confident result, only a starting point for a degenerate, anchor-less target.
+#[derive(Clone, Debug)]
+pub struct Shortlist {
+    pub label: String,
+    pub entries: Vec<ShortlistEntry>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SigReport {
     pub arch: Arch,
@@ -329,5 +349,8 @@ pub struct SigReport {
     pub chosen: Option<SigCandidate>,
     pub alternates: Vec<SigCandidate>,
     pub rejected: Vec<SigCandidate>,
+    /// Per-build candidate shortlists, populated only when no confident signature could be produced
+    /// and the target looks like one of a family of structural near-duplicates.
+    pub shortlists: Vec<Shortlist>,
     pub diagnostics: Vec<Diag>,
 }

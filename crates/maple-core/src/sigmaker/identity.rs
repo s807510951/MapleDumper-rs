@@ -368,6 +368,42 @@ pub fn best_fingerprint_match(
     best.map(|(rva, sim, id)| (rva, sim, runner_up, id))
 }
 
+/// The top `k` instruction-boundary windows by similarity to `reference`, at least `floor`, each more
+/// than one instruction apart (gap-deduped). For the last-resort shortlist: when nothing pinned the
+/// function uniquely, this surfaces the family of structural near-duplicates it belongs to so the
+/// caller can list them for manual disambiguation. x86 only; empty on a non-x86 image.
+#[must_use]
+pub(super) fn fingerprint_topk(
+    img: &ImageInput,
+    reference: &FnIdentity,
+    k: usize,
+    floor: f64,
+) -> Vec<(usize, f64)> {
+    if !matches!(img.arch, Arch::X86) {
+        return Vec::new();
+    }
+    const GAP: usize = 16;
+    let mut scored: Vec<(usize, f64)> = instruction_boundaries(img)
+        .into_iter()
+        .filter_map(|rva| {
+            let sim = reference.similarity(&fn_identity(img, rva));
+            (sim >= floor).then_some((rva, sim))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let mut out: Vec<(usize, f64)> = Vec::new();
+    for (rva, sim) in scored {
+        if out.iter().any(|(r, _)| r.abs_diff(rva) < GAP) {
+            continue;
+        }
+        out.push((rva, sim));
+        if out.len() >= k {
+            break;
+        }
+    }
+    out
+}
+
 fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
     let ascii = text.as_bytes();
     let utf16: Vec<u8> = ascii.iter().flat_map(|&b| [b, 0]).collect();
