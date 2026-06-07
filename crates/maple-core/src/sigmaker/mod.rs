@@ -287,6 +287,7 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
     }
 }
 
+mod encoding;
 mod identity;
 pub use identity::*;
 
@@ -436,6 +437,117 @@ fn fingerprint_relocate(
     let (scores, reasons) = scoring::score_fingerprint(&ev);
     // A fingerprint relocation is semantic-only: no byte or string proof backs it, so it is capped
     // below the byte/string anchors (never better than B) however high the similarity runs.
+    let grade = scoring::grade_from(scores.final_score, false, false).max_rank(Grade::B);
+    Some(SigCandidate {
+        aob,
+        suffix: Suffix::None,
+        grade,
+        score: scores.final_score,
+        bytes_len: 0,
+        fixed: 0,
+        wildcards: 0,
+        fixed_ratio: 0.0,
+        reloc_safe: true,
+        scores,
+        reasons,
+        per_version,
+        diags: Vec::new(),
+    })
+}
+
+// Thresholds for the encoding-fingerprint relocation. The signal is a near-exact encoding match (it
+// keeps registers and operand sizes and masks only the relocatable values), so the bar is high: the
+// best window must clear ENC_MIN_SIMILARITY, be the SOLE window at the top score (no tie), and lead
+// the runner-up by ENC_MIN_MARGIN, with every build's relocated window mutually consistent. A true
+// recompile shifts register allocation, the leading-signature prefilter then matches nothing, and the
+// fallback declines rather than guess.
+const ENC_MIN_SIMILARITY: f64 = 0.95;
+const ENC_MIN_MARGIN: f64 = 0.02;
+const ENC_MIN_MUTUAL: f64 = 0.92;
+// Below this many decoded encoding tokens the reference is too short to be a distinctive identity.
+const ENC_MIN_STREAM: usize = 10;
+
+/// Cross-version relocation by *instruction-encoding* fingerprint, for a function whose mnemonic
+/// stream ties across template-instanced siblings (so [`fingerprint_relocate`] declines) but whose
+/// per-instance register and operand-size signature is unique. The reference window is taken at the
+/// match site itself (not walked back to a prologue: the real target is a vtable-reached mid-function
+/// site with no standard prologue), its encoding stream is matched against every build, and a
+/// candidate is emitted only when each build has a single unambiguous high match and the relocated
+/// windows agree across builds. Declines (returns `None`) on any ambiguity or on a true recompile.
+/// x86 only. See [`encoding`] for why register + operand size, with values masked, is the right
+/// granularity.
+fn encoding_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+) -> Option<SigCandidate> {
+    if !matches!(images[ref_idx].arch, Arch::X86) {
+        return None;
+    }
+    let reference = encoding::encoding_stream(&images[ref_idx], ref_rva as usize);
+    if reference.len() < ENC_MIN_STREAM {
+        return None;
+    }
+
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut streams: Vec<Vec<u64>> = Vec::new();
+    let mut min_sim = 1.0f64;
+    for &idx in required {
+        let img = &images[idx];
+        let (rva, sim, runner, ties) = encoding::best_encoding_match(img, &reference)?;
+        // A weak, tied, or non-unique best is not a confident relocation: decline the whole fallback
+        // rather than emit a guessed RVA for this build.
+        if sim < ENC_MIN_SIMILARITY || ties != 1 || sim - runner < ENC_MIN_MARGIN {
+            return None;
+        }
+        min_sim = min_sim.min(sim);
+        streams.push(encoding::encoding_stream(img, rva));
+        per_version.push(PerVersion {
+            label: img.label.clone(),
+            match_rva: Some(rva as u64),
+            resolved_target_rva: Some(rva as u64),
+            target_kind: Some(TargetKind::Code),
+            fingerprint_similarity: None,
+        });
+    }
+    // Mutual consistency: every build's relocated window must look like the reference build's, so one
+    // build that locked onto a different instance sinks the result. Conservative minimum, not average.
+    let mutual = streams
+        .iter()
+        .skip(1)
+        .map(|s| encoding::encoding_similarity(&streams[0], s))
+        .fold(1.0f64, f64::min);
+    if streams.len() >= 2 && mutual < ENC_MIN_MUTUAL {
+        return None;
+    }
+    for k in 1..streams.len() {
+        per_version[k].fingerprint_similarity =
+            Some(encoding::encoding_similarity(&streams[0], &streams[k]));
+    }
+
+    // A compact, stable label for the encoding identity (not a re-scannable byte pattern, like
+    // `@fingerprint=`): the token count and a fold of the reference encoding stream.
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for &t in &reference {
+        h ^= t;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let aob = format!("@encoding={}:{:016X}", reference.len(), h);
+
+    let ev = scoring::FingerprintEvidence {
+        builds: required.len(),
+        min_similarity: min_sim,
+        mutual_similarity: if streams.len() >= 2 { mutual } else { min_sim },
+        ref_ident: Some(fn_identity(&images[ref_idx], ref_rva as usize)),
+    };
+    let (scores, mut reasons) = scoring::score_fingerprint(&ev);
+    reasons.insert(
+        0,
+        "relocated across builds by instruction-encoding fingerprint (registers and operand sizes, immediate/displacement values masked)".to_string(),
+    );
+    // Encoding-only match: backed by the reference build's bytes but located in the others by shape,
+    // so capped below the byte/string anchors at B however high the similarity runs.
     let grade = scoring::grade_from(scores.final_score, false, false).max_rank(Grade::B);
     Some(SigCandidate {
         aob,
@@ -1085,10 +1197,14 @@ pub fn generate_with_progress(
     progress(SigStage::Scoring);
     if pool.is_empty() {
         // Fallbacks for when no byte signature could be hardened across the builds, tried in order of
-        // strength: a recompile-stable string anchor first, then a semantic fingerprint relocation as
-        // a last resort (lower confidence: no byte or string the resolver can re-scan for).
+        // strength: a recompile-stable string anchor first; then an encoding fingerprint, which pins
+        // the exact template instance the mnemonic fingerprint only ties on; then the fuzzier mnemonic
+        // fingerprint as a last resort. None emit a byte/string the resolver can re-scan for, so all
+        // are capped below the byte anchors.
         if let Some(anchor_cand) = string_anchor_candidate(images, &required, ref_idx, ref_rva) {
             pool.push(anchor_cand);
+        } else if let Some(enc_cand) = encoding_relocate(images, &required, ref_idx, ref_rva) {
+            pool.push(enc_cand);
         } else if let Some(fp_cand) = fingerprint_relocate(images, &required, ref_idx, ref_rva) {
             pool.push(fp_cand);
         }
@@ -2580,6 +2696,115 @@ mod tests {
                 c.aob
             );
         }
+    }
+
+    // The encoding-fingerprint counterpart of the test above, on the same real target (run with
+    // `--ignored`). Where the mnemonic stream TIES across template siblings and `fingerprint_relocate`
+    // must decline, the encoding fingerprint (registers + operand sizes, immediate/displacement values
+    // masked) pins the exact instance. Measured and asserted honestly:
+    //   v83 -> v84 (same codegen): the true site 0x4DE0BA is the SOLE high encoding match (no tie), so
+    //     the relocation succeeds where the mnemonic stream could not.
+    //   v84 -> v88 (a real recompile): register allocation shifts, the leading-signature prefilter
+    //     either matches nothing or a tied family, and the relocation DECLINES rather than guess.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn encoding_relocation_on_real_gms_is_unique_on_v84_and_declines_on_recompile() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let paths = [
+            dir.join("GMS_v83.1_U_DEVM.exe"),
+            dir.join("GMS_v84.1_U_DEVM.exe"),
+            dir.join("GMS_v88.1_U_DEVM.exe"),
+        ];
+        if paths.iter().any(|p| !p.exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let v83_img = FileImage::open(&paths[0]).expect("open v83");
+        let v84_img = FileImage::open(&paths[1]).expect("open v84");
+        let v88_img = FileImage::open(&paths[2]).expect("open v88");
+        let v83 = mk("v83", &v83_img);
+        let v84 = mk("v84", &v84_img);
+        let v88 = mk("v88", &v88_img);
+
+        // The reference encoding stream is taken AT the byte-AOB site (a mid-function, prologue-less,
+        // vtable-reached location), not walked back to a prologue.
+        let reference = encoding::encoding_stream(&v83, 0x4D6D95);
+        assert!(
+            reference.len() >= ENC_MIN_STREAM,
+            "reference stream too short"
+        );
+
+        // v83 -> v84: the true site is the unique high match.
+        let (rva, sim, runner, ties) =
+            encoding::best_encoding_match(&v84, &reference).expect("an encoding match in v84");
+        eprintln!(
+            "v84: enc best 0x{rva:X} sim {sim:.4} runner {runner:.4} margin {:+.4} ties {ties}",
+            sim - runner
+        );
+        assert_eq!(
+            rva, 0x4DE0BA,
+            "the unique encoding match must be the true v84 site"
+        );
+        assert!(
+            sim >= ENC_MIN_SIMILARITY,
+            "true site encoding sim {sim:.4} below the bar"
+        );
+        assert_eq!(
+            ties, 1,
+            "the true site must be the sole top window (no sibling tie)"
+        );
+        assert!(
+            sim - runner >= ENC_MIN_MARGIN,
+            "encoding margin {:.4} below the bar",
+            sim - runner
+        );
+
+        // v84 -> v88: a real recompile. Whatever the best is, it must NOT pass the confident-unique bar.
+        let v88_confident = encoding::best_encoding_match(&v88, &reference).is_some_and(
+            |(_, sim, runner, ties)| {
+                eprintln!("v88: enc best sim {sim:.4} runner {runner:.4} ties {ties}");
+                sim >= ENC_MIN_SIMILARITY && ties == 1 && sim - runner >= ENC_MIN_MARGIN
+            },
+        );
+        assert!(
+            !v88_confident,
+            "a true recompile must not yield a confident unique encoding match"
+        );
+
+        // End to end: encoding_relocate bridges v83+v84 with per-build RVAs, and declines v83+v88.
+        let bridged = encoding_relocate(&[v83.clone(), v84.clone()], &[0, 1], 0, 0x4D6D95)
+            .expect("encoding_relocate should bridge v83->v84");
+        assert!(bridged.aob.starts_with("@encoding="), "got {}", bridged.aob);
+        assert!(
+            bridged.grade.rank() >= Grade::B.rank(),
+            "encoding match is capped below A"
+        );
+        assert_eq!(bridged.per_version[0].resolved_target_rva, Some(0x4D6D95));
+        assert_eq!(bridged.per_version[1].resolved_target_rva, Some(0x4DE0BA));
+        assert!(
+            encoding_relocate(&[v83, v88], &[0, 1], 0, 0x4D6D95).is_none(),
+            "encoding_relocate must decline across a recompile it cannot bridge"
+        );
     }
 
     #[test]
