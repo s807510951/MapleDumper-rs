@@ -32,6 +32,17 @@ impl Grade {
         }
     }
 
+    /// Cap this grade at `ceiling`: a grade better than the ceiling is lowered to it, a worse one is
+    /// left alone. Used where an evidence class cannot earn the top bands however high it scores (a
+    /// fingerprint-only relocation, with no byte or string proof, is capped at B).
+    pub(super) fn max_rank(self, ceiling: Grade) -> Grade {
+        if self.rank() < ceiling.rank() {
+            ceiling
+        } else {
+            self
+        }
+    }
+
     /// The letter band for a `final_score` in 0..=100. The presentation grade is derived from the
     /// numeric score, never the other way round; callers then apply hard gates (F) and the packed cap
     /// (no better than D) on top.

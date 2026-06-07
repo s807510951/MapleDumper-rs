@@ -360,6 +360,100 @@ fn string_anchor_candidate(
     })
 }
 
+// Thresholds for the fingerprint-relocation fallback, tuned against the real GMS corpus (see the
+// `--ignored` test `fingerprint_relocation_on_real_gms_v83_to_v84_is_measured_and_honest`). A
+// distinctive function relocates near 1.0 with a clear margin; a structurally-thin or recompiled
+// function ties across many windows, so the fallback must DECLINE rather than emit a guess. These
+// gates encode that: a build must have a single best window comfortably above chance AND clearly ahead
+// of its nearest rival, and every build's window must agree with the reference's.
+const FP_MIN_SIMILARITY: f64 = 0.82;
+const FP_MIN_MARGIN: f64 = 0.06;
+const FP_MIN_MUTUAL: f64 = 0.82;
+
+/// Last-resort cross-version relocation by semantic fingerprint, for when the byte AOB matches too few
+/// builds to harden and no string anchor isolates the function either. The reference function's
+/// `FnIdentity` (mnemonic stream, CFG-lite shape, distinctive constants, referenced strings) is matched
+/// against every instruction-boundary code window in each build (see [`best_fingerprint_match`]); a
+/// build contributes only if its single best window clears [`FP_MIN_SIMILARITY`] and leads the
+/// runner-up by [`FP_MIN_MARGIN`] (so an ambiguous tie is rejected, not guessed). The fallback then
+/// requires every build's window to agree with the reference at no less than [`FP_MIN_MUTUAL`] before
+/// emitting a candidate, so one build that relocated to a different function cannot slip through.
+/// Returns `None` (declines) whenever the evidence is ambiguous or inconsistent. x86 only.
+fn fingerprint_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+) -> Option<SigCandidate> {
+    if !matches!(images[ref_idx].arch, Arch::X86) {
+        return None;
+    }
+    let ref_entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let reference = fn_identity(&images[ref_idx], ref_entry);
+    // Too thin to fingerprint at all: nothing to distinguish it from boilerplate, so do not even try.
+    if reference.instr_count < 6 {
+        return None;
+    }
+
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut idents: Vec<FnIdentity> = Vec::new();
+    let mut min_sim = 1.0f64;
+    for &idx in required {
+        let img = &images[idx];
+        let (rva, sim, runner_up, id) = best_fingerprint_match(img, &reference)?;
+        // A build whose best match is weak or ambiguous (tied with the runner-up) is not a confident
+        // relocation; decline the whole fallback rather than emit a guessed RVA for it.
+        if sim < FP_MIN_SIMILARITY || sim - runner_up < FP_MIN_MARGIN {
+            return None;
+        }
+        min_sim = min_sim.min(sim);
+        idents.push(id);
+        per_version.push(PerVersion {
+            label: img.label.clone(),
+            match_rva: Some(rva as u64),
+            resolved_target_rva: Some(rva as u64),
+            target_kind: Some(TargetKind::Code),
+            fingerprint_similarity: None,
+        });
+    }
+    // Mutual consistency: every build's chosen function must look like the reference's. The minimum
+    // pairwise similarity (conservative) must clear the bar, so one diverging build sinks the result.
+    let mutual = scoring::callee_similarity(&idents).unwrap_or(1.0);
+    if mutual < FP_MIN_MUTUAL {
+        return None;
+    }
+    for k in 1..idents.len() {
+        per_version[k].fingerprint_similarity = Some(idents[0].similarity(&idents[k]));
+    }
+
+    let aob = format!("@fingerprint={}", reference.fingerprint());
+    let ev = scoring::FingerprintEvidence {
+        builds: required.len(),
+        min_similarity: min_sim,
+        mutual_similarity: mutual,
+        ref_ident: idents.first().cloned(),
+    };
+    let (scores, reasons) = scoring::score_fingerprint(&ev);
+    // A fingerprint relocation is semantic-only: no byte or string proof backs it, so it is capped
+    // below the byte/string anchors (never better than B) however high the similarity runs.
+    let grade = scoring::grade_from(scores.final_score, false, false).max_rank(Grade::B);
+    Some(SigCandidate {
+        aob,
+        suffix: Suffix::None,
+        grade,
+        score: scores.final_score,
+        bytes_len: 0,
+        fixed: 0,
+        wildcards: 0,
+        fixed_ratio: 0.0,
+        reloc_safe: true,
+        scores,
+        reasons,
+        per_version,
+        diags: Vec::new(),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finalize(
     images: &[ImageInput],
@@ -989,10 +1083,15 @@ pub fn generate_with_progress(
     }
 
     progress(SigStage::Scoring);
-    if pool.is_empty()
-        && let Some(anchor_cand) = string_anchor_candidate(images, &required, ref_idx, ref_rva)
-    {
-        pool.push(anchor_cand);
+    if pool.is_empty() {
+        // Fallbacks for when no byte signature could be hardened across the builds, tried in order of
+        // strength: a recompile-stable string anchor first, then a semantic fingerprint relocation as
+        // a last resort (lower confidence: no byte or string the resolver can re-scan for).
+        if let Some(anchor_cand) = string_anchor_candidate(images, &required, ref_idx, ref_rva) {
+            pool.push(anchor_cand);
+        } else if let Some(fp_cand) = fingerprint_relocate(images, &required, ref_idx, ref_rva) {
+            pool.push(fp_cand);
+        }
     }
     // confidence first, then fewest wildcards / shortest / kind / AOB text, so the same inputs
     // always pick the same winner
@@ -2187,5 +2286,314 @@ mod tests {
                 .iter()
                 .any(|d| matches!(d, Diag::InvalidAob { .. }))
         );
+    }
+
+    // An x86 image (0x400 bytes) modelling a recompile: the target function is placed at `entry`,
+    // reached by a `call` from a per-build offset, surrounded by per-build filler. The two builds use
+    // DIFFERENT instruction encodings of the SAME mnemonic stream (`recompiled` picks the alternate
+    // encoding of mov/add/xor reg,reg), exactly as a recompiler does, so the opcode bytes differ and no
+    // byte AOB (direct, branch, or pointer) can stay fixed across both, while the mnemonic-level
+    // identity is preserved. With no string to anchor on either, this forces the fingerprint fallback.
+    fn fp_image(entry: usize, seed: u8, call_from: usize, recompiled: bool) -> Vec<u8> {
+        // Distinct filler per build so direct/branch/ptr byte windows cannot reconcile across builds.
+        let mut mem: Vec<u8> = (0..0x400u32).map(|i| (i as u8) ^ seed).collect();
+        // A frame prologue appearing in the filler by accident would add a competing candidate; scrub
+        // any 55 8B EC / 55 89 E5 the xor pattern happens to produce.
+        for i in 0..mem.len().saturating_sub(2) {
+            let w = &mem[i..i + 3];
+            if w[0] == 0x55 && ((w[1] == 0x8B && w[2] == 0xEC) || (w[1] == 0x89 && w[2] == 0xE5)) {
+                mem[i] = 0x90;
+            }
+        }
+        // call rel32 -> entry, so the entry is an enumerated candidate.
+        mem[call_from] = 0xE8;
+        let rel = entry as i32 - (call_from as i32 + 5);
+        mem[call_from + 1..call_from + 5].copy_from_slice(&rel.to_le_bytes());
+        // push ebp ; mov ebp,esp ; mov eax,imm32 ; add eax,ecx ; xor edx,edx ; imul eax,ebx
+        //          ; pop ebp ; ret  -- build B uses the alternate encoding of the reg,reg ops.
+        let (mov_ee, add, xor): ([u8; 2], [u8; 2], [u8; 2]) = if recompiled {
+            ([0x89, 0xE5], [0x03, 0xC1], [0x33, 0xD2]) // mov/add/xor, alternate encodings
+        } else {
+            ([0x8B, 0xEC], [0x01, 0xC8], [0x31, 0xD2])
+        };
+        let body = &mut mem[entry..];
+        body[0] = 0x55; // push ebp
+        body[1..3].copy_from_slice(&mov_ee); // mov ebp, esp
+        body[3] = 0xB8; // mov eax, imm32 -- a genuine magic constant the recompile preserves
+        body[4..8].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        body[8..10].copy_from_slice(&add); // add eax, ecx
+        body[10..12].copy_from_slice(&xor); // xor edx, edx
+        body[12..15].copy_from_slice(&[0x0F, 0xAF, 0xC3]); // imul eax, ebx
+        body[15] = 0x5D; // pop ebp
+        body[16] = 0xC3; // ret
+        mem
+    }
+
+    fn fp_input<'a>(label: &str, src: &'a BufferSource, hash: u64) -> ImageInput<'a> {
+        ImageInput {
+            label: label.to_string(),
+            source: src,
+            base: 0x1000,
+            size: 0x400,
+            code_regions: vec![Region {
+                base: 0x1000,
+                size: 0x400,
+            }],
+            regions: vec![Region {
+                base: 0x1000,
+                size: 0x400,
+            }],
+            import: None,
+            arch: Arch::X86,
+            code_hash: hash,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        }
+    }
+
+    #[test]
+    fn fingerprint_relocates_a_recompiled_function_when_bytes_and_strings_fail() {
+        // Two builds of the same function differing only in operand bytes (a different immediate, here
+        // also a different opcode tail so the byte AOB genuinely cannot be hardened), with no string to
+        // anchor on. The byte and string paths must fail and the fingerprint fallback must relocate the
+        // function in both builds and emit a candidate.
+        let a = BufferSource::new(0x1000, fp_image(0x40, 0x11, 0x10, false));
+        let b = BufferSource::new(0x1000, fp_image(0x120, 0x22, 0x90, true));
+        let report = generate(
+            &[fp_input("a", &a, 1), fp_input("b", &b, 2)],
+            &TargetSpec::Ref {
+                image: 0,
+                rva: 0x40,
+            },
+            &SigOptions::default(),
+        );
+        let cand = report
+            .chosen
+            .expect("a fingerprint-relocation fallback candidate");
+        assert!(
+            cand.aob.starts_with("@fingerprint="),
+            "expected a fingerprint anchor, got {}",
+            cand.aob
+        );
+        assert_eq!(cand.per_version.len(), 2);
+        // Each build relocates into its own copy of the function (the recompile moved it). A
+        // sliding-window relocation lands on the best-scoring boundary, which may be an instruction or
+        // two inside the entry, so assert membership in the function extent rather than the exact byte.
+        let in_fn_a =
+            (0x40..0x40 + 17).contains(&(cand.per_version[0].match_rva.unwrap() as usize));
+        let in_fn_b =
+            (0x120..0x120 + 17).contains(&(cand.per_version[1].match_rva.unwrap() as usize));
+        assert!(
+            in_fn_a && in_fn_b,
+            "both builds should relocate into the function body, got {:?} and {:?}",
+            cand.per_version[0].match_rva,
+            cand.per_version[1].match_rva
+        );
+        // The second build carries the cross-build similarity to the reference.
+        assert!(
+            cand.per_version[1]
+                .fingerprint_similarity
+                .is_some_and(|s| s >= FP_MIN_MUTUAL),
+            "cross-build similarity should be high, got {:?}",
+            cand.per_version[1].fingerprint_similarity
+        );
+        // Semantic-only: never better than B, and clearly weaker than a byte/string anchor.
+        assert!(
+            cand.grade.rank() >= Grade::B.rank(),
+            "a fingerprint-only relocation must not grade A, got {:?}",
+            cand.grade
+        );
+        assert!(cand.reasons.iter().any(|r| r.contains("fingerprint")));
+    }
+
+    // An x86 image whose only function (entry 0x120, reached by a call) is unrelated to the reference:
+    // a different mnemonic stream and a different magic constant, so nothing in it should fingerprint
+    // as the reference function.
+    fn fp_unrelated_image(seed: u8) -> Vec<u8> {
+        let mut mem: Vec<u8> = (0..0x400u32).map(|i| (i as u8) ^ seed).collect();
+        for i in 0..mem.len().saturating_sub(2) {
+            let w = &mem[i..i + 3];
+            if w[0] == 0x55 && ((w[1] == 0x8B && w[2] == 0xEC) || (w[1] == 0x89 && w[2] == 0xE5)) {
+                mem[i] = 0x90;
+            }
+        }
+        mem[0x90] = 0xE8;
+        let rel = 0x120i32 - (0x90 + 5);
+        mem[0x91..0x95].copy_from_slice(&rel.to_le_bytes());
+        // push ebp ; mov ebp,esp ; cmp eax, imm32 ; jne $+2 ; inc ecx ; not edx ; leave ; ret
+        let body = &mut mem[0x120..];
+        body[0..3].copy_from_slice(&[0x55, 0x8B, 0xEC]);
+        body[3] = 0x3D; // cmp eax, imm32
+        body[4..8].copy_from_slice(&0x0BAD_F00Du32.to_le_bytes()); // a different magic constant
+        body[8..10].copy_from_slice(&[0x75, 0x00]); // jne $+2
+        body[10] = 0x41; // inc ecx
+        body[11..13].copy_from_slice(&[0xF7, 0xD2]); // not edx
+        body[13] = 0xC9; // leave
+        body[14] = 0xC3; // ret
+        mem
+    }
+
+    #[test]
+    fn fingerprint_relocate_declines_when_the_function_is_absent_in_a_build() {
+        // The reference function exists in build A but build B holds only an unrelated function (a
+        // different mnemonic stream and a different magic constant). No confident, consistent
+        // relocation exists, so the fallback must decline rather than emit a wrong RVA, and generation
+        // reports no signature.
+        let a = BufferSource::new(0x1000, fp_image(0x40, 0x11, 0x10, false));
+        let b = BufferSource::new(0x1000, fp_unrelated_image(0x22));
+        let report = generate(
+            &[fp_input("a", &a, 1), fp_input("b", &b, 2)],
+            &TargetSpec::Ref {
+                image: 0,
+                rva: 0x40,
+            },
+            &SigOptions::default(),
+        );
+        assert!(
+            report.chosen.is_none(),
+            "an inconsistent relocation must not be emitted, got {:?}",
+            report.chosen.map(|c| c.aob)
+        );
+    }
+
+    #[test]
+    fn fingerprint_relocate_declines_for_a_too_thin_function() {
+        // A 1-instruction function (just `ret`) carries no distinguishing shape, so the fallback must
+        // refuse to fingerprint it rather than relocate on a single mnemonic that matches everywhere.
+        let mut bytes_a = vec![0u8; 0x80];
+        bytes_a[0x10] = 0xE8;
+        let rel = 0x40i32 - (0x10 + 5);
+        bytes_a[0x11..0x15].copy_from_slice(&rel.to_le_bytes());
+        bytes_a[0x40] = 0xC3; // ret
+        let mut bytes_b = bytes_a.clone();
+        bytes_b[0x20] = 0x90;
+        let a = BufferSource::new(0x1000, bytes_a);
+        let b = BufferSource::new(0x1000, bytes_b);
+        let ia = fp_input("a", &a, 1);
+        let ib = fp_input("b", &b, 2);
+        assert!(
+            fingerprint_relocate(&[ia, ib], &[0, 1], 0, 0x40).is_none(),
+            "a 1-instruction function is too thin to relocate by fingerprint"
+        );
+    }
+
+    #[test]
+    fn best_fingerprint_match_is_x86_only() {
+        // The candidate enumeration relies on x86 prologue/call shape; on x64 it must report nothing
+        // rather than scan with the wrong assumptions.
+        let src = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let mut x64 = img("x", &src, 0x1000, 49);
+        x64.arch = Arch::X64;
+        let reference = fn_identity(&x64, 0);
+        assert!(best_fingerprint_match(&x64, &reference).is_none());
+    }
+
+    // Manual cross-version measurement against the real GMS clients (run with `--ignored`). Ground
+    // truth: the byte AOB `B3 ?? 83 EC ?? 8B FC 8D 75 ??` matches v83 at RVA 0x4D6D95 and v84 at
+    // 0x4DE0BA; 0x4D6D95 and 0x4DE0BA are the same function, and the AOB is gone by v88.
+    //
+    // This records what the *semantic mnemonic fingerprint* can and cannot do on this real target, and
+    // is rigorously honest about the limit. The AOB site is a MID-FUNCTION location: no `55 8B EC`
+    // prologue precedes it, it is not a `call` destination, and it is not even on an instruction
+    // boundary in the canonical linear disassembly (the byte scanner matches it at a mid-instruction
+    // offset). Measured: the window taken AT 0x4DE0BA matches the v83 reference at similarity 1.0000, so
+    // the true site IS a perfect semantic match; but a clean instruction-boundary sweep of v84 produces
+    // a best around 0.97 that TIES its runner-up (margin 0.0000) on entirely different windows sharing
+    // the same mnemonic shape. The mnemonic stream alone cannot pin which window is right; only the byte
+    // AOB's exact operands disambiguate it. The production `fingerprint_relocate` therefore correctly
+    // DECLINES here (its uniqueness-margin gate is not met) rather than emit an ambiguous guess. We
+    // assert exactly this: a perfect match at the true site, and no usable uniqueness margin globally.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn fingerprint_relocation_on_real_gms_v83_to_v84_is_measured_and_honest() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let v83_path = dir.join("GMS_v83.1_U_DEVM.exe");
+        let v84_path = dir.join("GMS_v84.1_U_DEVM.exe");
+        if !v83_path.exists() || !v84_path.exists() {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        let v83_img = FileImage::open(&v83_path).expect("open v83");
+        let v84_img = FileImage::open(&v84_path).expect("open v84");
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let v83 = mk("v83", &v83_img);
+        let v84 = mk("v84", &v84_img);
+
+        let reference = fn_identity(&v83, 0x4D6D95);
+        // The window AT the true v84 site matches the v83 reference near-perfectly.
+        let sim_at_site = reference.similarity(&fn_identity(&v84, 0x4DE0BA));
+        eprintln!("v84 similarity at the true site 0x4DE0BA: {sim_at_site:.4}");
+        assert!(
+            sim_at_site >= 0.99,
+            "the window at the known v84 site should match near-exactly, got {sim_at_site:.4}"
+        );
+        // The global best over every instruction boundary ties at ~1.0 (the same mnemonic stream recurs
+        // at several windows), so there is no usable uniqueness margin to pin THIS window.
+        let (rva, sim, runner_up, _) =
+            best_fingerprint_match(&v84, &reference).expect("a best match in v84");
+        eprintln!(
+            "v84 global best window 0x{rva:X} sim {sim:.4} runner-up {runner_up:.4} margin {:.4}",
+            sim - runner_up
+        );
+        assert!(
+            sim - runner_up < FP_MIN_MARGIN,
+            "mnemonic stream is expected to tie on this target (margin {:.4} < {FP_MIN_MARGIN})",
+            sim - runner_up
+        );
+        // End-to-end: with a byte AOB that matches v84 but not later builds, generation across v83/v84
+        // cannot harden a byte signature here, no string anchors it, and the fingerprint fallback
+        // declines on the tie, so honestly no candidate is produced for this target across these two.
+        let report = generate(
+            &[v83, v84],
+            &TargetSpec::Ref {
+                image: 0,
+                rva: 0x4D6D95,
+            },
+            &SigOptions::default(),
+        );
+        if let Some(c) = &report.chosen {
+            // If a byte/branch/ptr signature did harden, it must be a real one, never the ambiguous
+            // fingerprint fallback.
+            assert!(
+                !c.aob.starts_with("@fingerprint="),
+                "the ambiguous fingerprint relocation must not be emitted for this target, got {}",
+                c.aob
+            );
+        }
+    }
+
+    #[test]
+    fn fingerprint_relocate_is_not_tried_when_a_byte_signature_succeeds() {
+        // When the byte path already produces a candidate, the fingerprint fallback must not run: the
+        // chosen signature is a real AOB, not an @fingerprint anchor.
+        let a = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let b = BufferSource::new(0x1000, blob(0x999, 0xBB));
+        let report = generate(
+            &[img("a", &a, 0x1000, 49), img("b", &b, 0x1000, 49)],
+            &TargetSpec::Ref { image: 0, rva: 0 },
+            &SigOptions::default(),
+        );
+        let cand = report.chosen.expect("a byte candidate");
+        assert!(!cand.aob.starts_with("@fingerprint="));
     }
 }

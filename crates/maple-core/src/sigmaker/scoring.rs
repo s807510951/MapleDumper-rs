@@ -381,6 +381,79 @@ pub(super) fn score_string_anchor(ev: &StringEvidence) -> (SubScores, Vec<String
     (s, reasons)
 }
 
+/// What `fingerprint_relocate` measured about a semantic cross-version relocation. The function was
+/// located by matching its `FnIdentity` (mnemonic stream, CFG-lite shape, constants, strings), not by
+/// any byte or string the signature can re-scan for, so it is scored from the strength and consistency
+/// of that match rather than from byte entropy or fixed-byte density.
+pub(super) struct FingerprintEvidence {
+    /// Distinct builds the function was relocated in (all required builds; the fallback declines if
+    /// any build is missing a confident match).
+    pub builds: usize,
+    /// The weakest single-build best-match similarity to the reference (the conservative floor).
+    pub min_similarity: f64,
+    /// The minimum pairwise similarity among the relocated functions across builds (mutual agreement).
+    pub mutual_similarity: f64,
+    /// Reference build's identity, for semantic richness.
+    pub ref_ident: Option<FnIdentity>,
+}
+
+/// Score a fingerprint-relocated candidate from its evidence. Entropy is zero (there are no fixed code
+/// bytes), and the other sub-scores are reinterpreted for a semantic match: `cross_build` is the
+/// mutual similarity, `resolver_confidence`/`uniqueness` reflect how strong and unambiguous the match
+/// was, and `semantic` reflects the richness of the relocated function. The caller additionally caps
+/// the grade at B, since no byte or string evidence backs the relocation.
+pub(super) fn score_fingerprint(ev: &FingerprintEvidence) -> (SubScores, Vec<String>) {
+    let pct = |x: f64| (x * 100.0).round().clamp(0.0, 100.0) as u32;
+    // How confidently each build matched (the floor) drives both uniqueness and resolver confidence:
+    // a relocation that only just cleared the bar is less trustworthy than one matching near-exactly.
+    let uniqueness = pct(ev.min_similarity);
+    let cross_build = pct(ev.mutual_similarity);
+    let resolver_confidence = if ev.builds >= 2 {
+        pct((ev.min_similarity + ev.mutual_similarity) / 2.0)
+    } else {
+        // A single build proves no cross-version stability, so confidence is held down regardless.
+        70.min(pct(ev.min_similarity))
+    };
+    let stability = if ev.builds >= 2 { 88 } else { 72 };
+    let mut semantic = 64.0;
+    if let Some(id) = &ev.ref_ident {
+        semantic += (id.instr_count as f64).min(12.0);
+        semantic += ((id.blocks.saturating_sub(1)) as f64 * 4.0).min(8.0);
+        semantic += (id.strings.len() as f64 * 2.0).min(6.0);
+        semantic += (id.calls as f64 * 2.0).min(4.0);
+    }
+    let semantic = semantic.round().clamp(0.0, 100.0) as u32;
+
+    let mut s = SubScores {
+        uniqueness,
+        stability,
+        entropy: 0,
+        semantic,
+        resolver_confidence,
+        cross_build,
+        final_score: 0,
+    };
+    s.final_score = weighted_final(&s);
+
+    let mut reasons = vec![
+        "relocated across builds by semantic fingerprint (no byte/string anchor available)"
+            .to_string(),
+    ];
+    if ev.builds >= 2 {
+        reasons.push(format!(
+            "matched a consistent function in {} builds (min similarity {:.0}%, mutual {:.0}%)",
+            ev.builds,
+            ev.min_similarity * 100.0,
+            ev.mutual_similarity * 100.0
+        ));
+    } else {
+        reasons
+            .push("validated against only one build; cross-version stability unconfirmed".into());
+    }
+    reasons.push("fingerprint-only match: no byte or string evidence, capped below A/B".into());
+    (s, reasons)
+}
+
 fn weighted_final(s: &SubScores) -> u32 {
     // Content-validation signals dominate, so a sparse-but-validated branch/ptr anchor still grades
     // well; byte-level signals (entropy, density) refine within a tier.
@@ -859,6 +932,53 @@ mod tests {
             per_version: Vec::new(),
             diags: Vec::new(),
         }
+    }
+
+    fn fingerprint_evidence() -> FingerprintEvidence {
+        FingerprintEvidence {
+            builds: 2,
+            min_similarity: 1.0,
+            mutual_similarity: 1.0,
+            ref_ident: Some(ident_with(&[1, 2, 3, 4, 5, 6])),
+        }
+    }
+
+    #[test]
+    fn fingerprint_score_has_no_code_byte_entropy_and_tracks_similarity() {
+        let strong = score_fingerprint(&fingerprint_evidence()).0;
+        assert_eq!(
+            strong.entropy, 0,
+            "a fingerprint match has no code-byte entropy"
+        );
+        assert_eq!(strong.cross_build, 100);
+        let mut weak_ev = fingerprint_evidence();
+        weak_ev.min_similarity = 0.84;
+        weak_ev.mutual_similarity = 0.84;
+        let weak = score_fingerprint(&weak_ev).0;
+        assert!(
+            weak.final_score < strong.final_score,
+            "a weaker match must score lower ({} !< {})",
+            weak.final_score,
+            strong.final_score
+        );
+    }
+
+    #[test]
+    fn single_build_fingerprint_holds_confidence_down() {
+        // With no second build there is no cross-version proof, so resolver confidence is held down and
+        // the reasons say so.
+        let mut ev = fingerprint_evidence();
+        ev.builds = 1;
+        let (s, reasons) = score_fingerprint(&ev);
+        assert!(s.resolver_confidence <= 70);
+        assert!(reasons.iter().any(|r| r.contains("one build")));
+    }
+
+    #[test]
+    fn grade_max_rank_caps_but_never_promotes() {
+        assert_eq!(Grade::A.max_rank(Grade::B), Grade::B); // capped down
+        assert_eq!(Grade::C.max_rank(Grade::B), Grade::C); // already weaker, left alone
+        assert_eq!(Grade::B.max_rank(Grade::B), Grade::B);
     }
 
     #[test]
