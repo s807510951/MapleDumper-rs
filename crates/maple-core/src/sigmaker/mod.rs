@@ -289,6 +289,7 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
 
 mod encoding;
 mod identity;
+mod imports;
 pub use identity::*;
 
 /// Mint a byte signature unique within a SINGLE build at `rva`, masking operand and relocated bytes
@@ -417,6 +418,87 @@ fn string_anchor_candidate(
         fixed: anchor.text.len(),
         wildcards: 0,
         fixed_ratio: 1.0,
+        reloc_safe: true,
+        scores,
+        reasons,
+        per_version,
+        diags: Vec::new(),
+    })
+}
+
+// A function relocated by its import set could in principle resolve to a different function across
+// builds; require the resolved functions to look alike (minimum cross-build mnemonic similarity) so a
+// coincidental import-set collision is rejected rather than shipped.
+const IMPORT_MIN_CONSISTENCY: f64 = 0.50;
+
+/// Cross-version relocation by the distinctive SET of imported APIs a function calls. Imported names
+/// are recompile-stable, so a function calling, say, the twelve `ws2_32` socket APIs is identifiable
+/// in any build even after its bytes are rewritten; the same function in a recompiled build is then
+/// handed back with a freshly minted per-build AOB. Emits only when the import set pins exactly one
+/// function in every required build (an ambiguous or absent set declines) and the relocated functions
+/// agree across builds. x86 / PE32 only. See [`imports`].
+fn import_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+    opts: &SigOptions,
+) -> Option<SigCandidate> {
+    if !matches!(images[ref_idx].arch, Arch::X86) {
+        return None;
+    }
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let anchor = imports::make_import_anchor(&images[ref_idx], entry)?;
+
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut idents: Vec<FnIdentity> = Vec::new();
+    for &idx in required {
+        let resolved = imports::resolve_import_anchor(&images[idx], &anchor)? as u64;
+        idents.push(fn_identity(&images[idx], resolved as usize));
+        per_version.push(PerVersion {
+            label: images[idx].label.clone(),
+            match_rva: Some(resolved),
+            resolved_target_rva: Some(resolved),
+            target_kind: Some(TargetKind::Code),
+            fingerprint_similarity: None,
+            aob: single_build_aob(&images[idx], resolved as usize, opts),
+        });
+    }
+    for k in 1..idents.len() {
+        per_version[k].fingerprint_similarity = Some(idents[0].similarity(&idents[k]));
+    }
+    // The same import set must resolve to the SAME function across builds, not merely to some function
+    // in each: the conservative minimum cross-build similarity must clear the bar.
+    let mutual = scoring::callee_similarity(&idents).unwrap_or(1.0);
+    if mutual < IMPORT_MIN_CONSISTENCY {
+        return None;
+    }
+
+    let aob = format!("@imports={}", anchor.names.join(","));
+    let ev = scoring::FingerprintEvidence {
+        builds: required.len(),
+        min_similarity: mutual,
+        mutual_similarity: mutual,
+        ref_ident: idents.first().cloned(),
+    };
+    let (scores, mut reasons) = scoring::score_fingerprint(&ev);
+    reasons.insert(
+        0,
+        format!(
+            "relocated across builds by a distinctive set of {} imported APIs",
+            anchor.names.len()
+        ),
+    );
+    let grade = scoring::grade_from(scores.final_score, false, false).max_rank(Grade::B);
+    Some(SigCandidate {
+        aob,
+        suffix: Suffix::None,
+        grade,
+        score: scores.final_score,
+        bytes_len: 0,
+        fixed: 0,
+        wildcards: 0,
+        fixed_ratio: 0.0,
         reloc_safe: true,
         scores,
         reasons,
@@ -1267,14 +1349,18 @@ pub fn generate_with_progress(
     progress(SigStage::Scoring);
     if pool.is_empty() {
         // Fallbacks for when no byte signature could be hardened across the builds, tried in order of
-        // strength: a recompile-stable string anchor first; then an encoding fingerprint, which pins
-        // the exact template instance the mnemonic fingerprint only ties on; then the fuzzier mnemonic
-        // fingerprint as a last resort. None emit a byte/string the resolver can re-scan for, so all
-        // are capped below the byte anchors.
+        // strength: a recompile-stable string anchor first; then an import-set anchor (a distinctive
+        // set of imported APIs is just as recompile-stable as a string); then an encoding fingerprint,
+        // which pins the exact template instance the mnemonic fingerprint only ties on; then the
+        // fuzzier mnemonic fingerprint as a last resort. Each relocated build is handed a freshly
+        // minted per-build AOB; none emit a byte/string the resolver can re-scan for as a cross-build
+        // pattern, so all are capped below the byte anchors.
         if let Some(anchor_cand) =
             string_anchor_candidate(images, &required, ref_idx, ref_rva, opts)
         {
             pool.push(anchor_cand);
+        } else if let Some(imp_cand) = import_relocate(images, &required, ref_idx, ref_rva, opts) {
+            pool.push(imp_cand);
         } else if let Some(enc_cand) = encoding_relocate(images, &required, ref_idx, ref_rva, opts)
         {
             pool.push(enc_cand);
@@ -3075,6 +3161,77 @@ mod tests {
         assert!(
             shown > 0,
             "expected at least one string anchor that bridges v83 -> v88"
+        );
+    }
+
+    // Import-set relocation on the real corpus (run with `--ignored`). The network function at v84
+    // 0x6AC743 calls the twelve ws2_32 socket APIs; that set is unique in both builds, so it relocates
+    // to v88 and is handed a fresh v88 AOB that uniquely matches v88. Demonstrates finding a function
+    // across a recompile by a recompile-stable import set, for a function that references no string.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn import_anchor_relocates_a_network_function_across_a_real_recompile() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let p84 = dir.join("GMS_v84.1_U_DEVM.exe");
+        let p88 = dir.join("GMS_v88.1_U_DEVM.exe");
+        if !p84.exists() || !p88.exists() {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i84 = FileImage::open(&p84).expect("open v84");
+        let i88 = FileImage::open(&p88).expect("open v88");
+        let v84 = mk("v84", &i84);
+        let v88 = mk("v88", &i88);
+
+        let cand = import_relocate(
+            &[v84.clone(), v88.clone()],
+            &[0, 1],
+            0,
+            0x6AC743,
+            &SigOptions::default(),
+        )
+        .expect("import_relocate should bridge the network function v84 -> v88");
+        assert!(cand.aob.starts_with("@imports="), "got {}", cand.aob);
+        assert!(
+            cand.aob.contains("ws2_32"),
+            "import set should include winsock: {}",
+            cand.aob
+        );
+        assert!(cand.grade.rank() >= Grade::B.rank());
+        let aob88 = cand.per_version[1].aob.clone().expect("a fresh v88 AOB");
+        eprintln!(
+            "v84 0x{:X} -> v88 0x{:X} | {} | v88 AOB {}",
+            cand.per_version[0].resolved_target_rva.unwrap(),
+            cand.per_version[1].resolved_target_rva.unwrap(),
+            cand.aob,
+            aob88
+        );
+        let sig = crate::pattern::try_signature_from_aob(&aob88).unwrap();
+        let pat = CompiledPattern::new(&sig).unwrap();
+        assert_eq!(
+            CodeCache::build(&v88).locate(&pat).0,
+            1,
+            "the minted v88 AOB must uniquely match v88"
         );
     }
 
