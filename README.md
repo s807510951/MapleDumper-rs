@@ -153,8 +153,8 @@ When no single byte pattern survives every supplied build, the generator falls b
 stack of recompile-stable anchors, tried strongest first and stopping at the first that pins the
 function confidently:
 
-- **String anchor** — a read-only string the function references (build-invariant; 71-100% cross-version
-  survival, versus 0-2% for a byte pattern).
+- **String anchor** — a read-only string the function references (build-invariant, so it survives a
+  recompile that moves every byte; see the measured cross-version coverage below).
 - **Import anchor** — the distinctive set of imported APIs it calls.
 - **Caller anchor** — a string-anchored *caller*, with the target re-found as the caller's callee whose
   identity matches, so a function with no handle of its own is reachable through one that has.
@@ -369,8 +369,20 @@ StatWindow = @string=UI/UIWindow2.img/Stat @also=UI/UIWindow2.img/Stat/main
 ```
 
 The engine finds the string in data, follows the unique code reference to it, and resolves to the
-enclosing function entry. On real multi-version MapleStory clients these resolve to the same function
-72-100% of the time across versions, against 0-2% for byte signatures.
+enclosing function entry.
+
+**Measured cross-version coverage.** The `--ignored` harness
+`cross_version_relocation_coverage_and_false_positive_sweep` (in `crates/maple-core/src/sigmaker/`)
+sweeps the GMS v83 to v95.1 lineage and reports, per anchor, how many functions relocate and at what
+wrong-address rate. False positives are judged by checks independent of the anchor under test (a
+reverse round-trip, a second referenced-string corroboration, and post-recompile identity). On a
+local client corpus the string anchor resolves the same function in 100% of adjacent builds
+(v83 through v91) and 71% across the v95 class refactor, over the v83 string-anchorable population,
+and the import, caller, and vtable anchors had zero confirmed wrong-address landings. A plain byte
+signature, by contrast, rarely survives a recompile that moves operands and reorders code, which is
+why these recompile-stable anchors exist. The figures are reproducible with that harness against your
+own client builds (the real clients are copyrighted and not redistributable, so no corpus ships in
+this repository).
 
 ## Architecture at a glance
 
@@ -388,9 +400,11 @@ runtime via `is_x86_feature_detected!` with a scalar fallback. For large pattern
 a single-pass multi-pattern index, so cost grows with the buffer plus matches rather than the buffer
 times the pattern count.
 
-Synthetic throughput (criterion `cargo bench`, 8 MiB code-like buffer): the rarest-byte anchor scans
-at roughly 29 GiB/s, versus roughly 0.8 GiB/s when forced onto a common byte like `0x48`, about a 37x
-difference, which is exactly why the anchor heuristic exists. (`cargo run --release --example
+Synthetic throughput (criterion `cargo bench`, 8 MiB code-like buffer) on the author's hardware: the
+single-pattern AVX2 path with a rarest-byte anchor scans at roughly 29 GiB/s, versus roughly 0.8 GiB/s
+when forced onto a common byte like `0x48`, about a 37x difference, which is exactly why the anchor
+heuristic exists. (The multi-pattern index path is scalar, so it trades that per-byte speed for
+O(buffer + matches) instead of O(buffer x patterns); the 29 GiB/s figure is the single-pattern case.) (`cargo run --release --example
 throughput` is a dependency-light equivalent.) These figures are synthetic and hardware-dependent;
 reproduce them locally with `cargo bench`.
 
