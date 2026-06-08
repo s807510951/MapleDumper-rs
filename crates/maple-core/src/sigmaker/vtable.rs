@@ -878,6 +878,65 @@ mod tests {
         );
     }
 
+    // Probe (run with `--ignored`): does the target's vtable have string-anchorable SIBLING methods that
+    // resolve into v95, so the table (and the target's slot) can be grounded across the v95 break by a
+    // build-stable string even though the target method itself references none.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn probe_string_anchorable_vtable_siblings_v91_to_v95() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        if !dir.join("GMS_v91.1_U_DEVM.exe").exists() || !dir.join("GMS_v95.1_U_DEVM.exe").exists()
+        {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        let i91 = FileImage::open(&dir.join("GMS_v91.1_U_DEVM.exe")).unwrap();
+        let i951 = FileImage::open(&dir.join("GMS_v95.1_U_DEVM.exe")).unwrap();
+        let v91 = open_real(&i91, "v91");
+        let v951 = open_real(&i951, "v95.1");
+
+        let target_entry = crate::sigmaker::identity::enclosing_function(&v91, 0x5BCCEF);
+        let buf = whole_image(&v91);
+        let vts = vtables(&v91, &buf);
+        let (_, slots) = vts
+            .iter()
+            .find(|(_, slots)| {
+                slots
+                    .iter()
+                    .any(|&sv| follow_thunk(&v91, sv).0 == target_entry)
+            })
+            .expect("the v91 vtable holding the method");
+        let target_slot = slots
+            .iter()
+            .position(|&sv| follow_thunk(&v91, sv).0 == target_entry)
+            .unwrap();
+        eprintln!(
+            "v91 vtable: {} slots, target at slot {target_slot}",
+            slots.len()
+        );
+
+        let mut bridged = 0;
+        for (k, &sv) in slots.iter().enumerate() {
+            let fnrva = follow_thunk(&v91, sv).0;
+            let Some(a) = crate::sigmaker::identity::make_string_anchor(&v91, fnrva) else {
+                continue;
+            };
+            if let Some(r) = crate::sigmaker::identity::resolve_string_anchor(&v951, &a) {
+                bridged += 1;
+                if bridged <= 12 {
+                    eprintln!("  slot {k} (fn 0x{fnrva:X}) anchors {:?} -> v95.1 0x{r:X}", a.text);
+                }
+            }
+        }
+        eprintln!(
+            "string-anchorable sibling slots resolving in v95.1: {bridged} of {}",
+            slots.len()
+        );
+    }
+
     // `make_vtable_anchor` on real data (run with `--ignored`): a virtual method in the target table is
     // anchored to its own table and reads back to itself on a self-resolve.
     #[test]

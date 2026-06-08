@@ -3946,6 +3946,200 @@ mod tests {
         }
     }
 
+    // Probe (run with `--ignored`): which recompile-stable handle can bridge the clean method across the
+    // v91 -> v95 structural break the vtable cannot cross. Checks the method's own string and import
+    // anchors, then whether any of its callers string-anchor (so a caller-relative bridge is viable).
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn probe_v91_to_v95_handles_for_the_clean_method() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let needed = [
+            "GMS_v91.1_U_DEVM.exe",
+            "GMS_v95.1_U_DEVM.exe",
+            "GMS_v95.5_U_DEVM.exe",
+        ];
+        if needed.iter().any(|n| !dir.join(n).exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i91 = FileImage::open(&dir.join(needed[0])).unwrap();
+        let i951 = FileImage::open(&dir.join(needed[1])).unwrap();
+        let i955 = FileImage::open(&dir.join(needed[2])).unwrap();
+        let v91 = mk("v91", &i91);
+        let v951 = mk("v95.1", &i951);
+        let v955 = mk("v95.5", &i955);
+
+        let entry = identity::enclosing_function(&v91, 0x5BCCEF);
+        eprintln!("v91 clean method entry 0x{entry:X}");
+        let id = fn_identity(&v91, entry);
+        eprintln!("  strings it references: {:?}", id.strings);
+        match make_string_anchor(&v91, entry) {
+            Some(a) => {
+                eprintln!("  string anchor {:?} also {:?}", a.text, a.also);
+                eprintln!(
+                    "    -> v95.1 {:?}  v95.5 {:?}",
+                    resolve_string_anchor(&v951, &a).map(|r| format!("0x{r:X}")),
+                    resolve_string_anchor(&v955, &a).map(|r| format!("0x{r:X}"))
+                );
+            }
+            None => eprintln!("  NO string anchor on the method itself"),
+        }
+        match imports::make_import_anchor(&v91, entry) {
+            Some(a) => {
+                eprintln!("  import anchor {:?}", a.names);
+                eprintln!(
+                    "    -> v95.1 {:?}",
+                    imports::resolve_import_anchor(&v951, &a).map(|r| format!("0x{r:X}"))
+                );
+            }
+            None => eprintln!("  NO import anchor on the method itself"),
+        }
+
+        // Callers of the method in v91, and how many of them string-anchor into v95.1 (caller-relative).
+        let buf = read_region(v91.source, v91.base, v91.size);
+        let mut callers: Vec<usize> = Vec::new();
+        let mut i = 0usize;
+        while i + 5 <= buf.len() {
+            if buf[i] == 0xE8 {
+                let rel =
+                    i32::from_le_bytes([buf[i + 1], buf[i + 2], buf[i + 3], buf[i + 4]]) as i64;
+                let t = (i + 5) as i64 + rel;
+                if t == entry as i64 {
+                    callers.push(identity::enclosing_function(&v91, i));
+                }
+            }
+            i += 1;
+        }
+        callers.sort_unstable();
+        callers.dedup();
+        eprintln!("{} distinct caller(s) of the method in v91", callers.len());
+        let mut bridgeable = 0;
+        for &c in callers.iter().take(60) {
+            let Some(a) = make_string_anchor(&v91, c) else {
+                continue;
+            };
+            if let Some(r) = resolve_string_anchor(&v951, &a) {
+                bridgeable += 1;
+                if bridgeable <= 8 {
+                    eprintln!("  caller 0x{c:X} string-anchors {:?} -> v95.1 0x{r:X}", a.text);
+                }
+            }
+        }
+        eprintln!("string-anchorable callers resolving in v95.1: {bridgeable}");
+    }
+
+    // The automated v91 -> v95 AOB pipeline at scale (run with `--ignored`): for every v91 function that
+    // references a string, anchor it by that build-stable string, resolve it in v95.1, mint a fresh
+    // operand-masked AOB at the resolved address, and VALIDATE that the AOB matches uniquely there. This
+    // is the way across the v95 break for any function with a stable handle (a string survives a
+    // recompile that moves every byte), and it is fully automated end to end.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn automated_v91_to_v95_aobs_via_string_anchor() {
+        use crate::fileimage::FileImage;
+        use std::collections::BTreeSet;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        if !dir.join("GMS_v91.1_U_DEVM.exe").exists() || !dir.join("GMS_v95.1_U_DEVM.exe").exists()
+        {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i91 = FileImage::open(&dir.join("GMS_v91.1_U_DEVM.exe")).unwrap();
+        let i951 = FileImage::open(&dir.join("GMS_v95.1_U_DEVM.exe")).unwrap();
+        let v91 = mk("v91", &i91);
+        let v951 = mk("v95.1", &i951);
+        let opts = SigOptions::default();
+
+        // Every E8 rel32 call target in v91 code: a clean set of real function entries to try.
+        let mut entries: BTreeSet<usize> = BTreeSet::new();
+        for r in &v91.code_regions {
+            let bytes = read_region(v91.source, r.base, r.size);
+            for (i, win) in bytes.windows(5).enumerate() {
+                if win[0] == 0xE8 {
+                    let rel = i32::from_le_bytes([win[1], win[2], win[3], win[4]]) as i64;
+                    let t = (r.base + i + 5) as i64 + rel - v91.base as i64;
+                    if t > 0x1000 && (t as usize) < v91.size {
+                        entries.insert(t as usize);
+                    }
+                }
+            }
+        }
+        eprintln!("{} v91 function entries to consider", entries.len());
+
+        let (mut tried, mut ok, mut shown) = (0usize, 0usize, 0usize);
+        // Bounded scan: make_string_anchor declines fast on a function with no usable string, so we walk
+        // entries until enough have bridged to prove the pipeline, keeping the run short.
+        for entry in entries.into_iter().take(20000) {
+            let Some(anchor) = make_string_anchor(&v91, entry) else {
+                continue;
+            };
+            let Some(v95rva) = resolve_string_anchor(&v951, &anchor) else {
+                continue;
+            };
+            tried += 1;
+            let Some(aob) = single_build_aob(&v951, v95rva, &opts) else {
+                continue;
+            };
+            if aob_unique_at(&v951, &aob, v95rva) {
+                ok += 1;
+                if shown < 6 {
+                    shown += 1;
+                    eprintln!(
+                        "  v91 0x{entry:X}  anchor {:?}  -> v95.1 0x{v95rva:X}\n      AOB: {aob}",
+                        anchor.text
+                    );
+                }
+            }
+            if ok >= 20 {
+                break; // enough evidence; keep the test fast
+            }
+        }
+        eprintln!("validated v91 -> v95.1 AOBs via string anchor: {ok} (of {tried} resolved)");
+        assert!(
+            ok > 0,
+            "expected automated, validated v91 -> v95.1 AOBs via the string anchor"
+        );
+    }
+
     #[test]
     fn fingerprint_relocate_is_not_tried_when_a_byte_signature_succeeds() {
         // When the byte path already produces a candidate, the fingerprint fallback must not run: the
