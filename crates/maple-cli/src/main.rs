@@ -1188,6 +1188,14 @@ struct JShortlist {
     candidates: Vec<JShortEntry>,
 }
 #[derive(Serialize)]
+struct JAobRange {
+    aob: String,
+    minted_in: String,
+    first: String,
+    last: String,
+    labels: Vec<String>,
+}
+#[derive(Serialize)]
 struct JReport {
     arch: String,
     unique_builds: usize,
@@ -1201,6 +1209,7 @@ struct JReport {
     holdout: Vec<JHold>,
     string_anchor: Option<String>,
     shortlists: Vec<JShortlist>,
+    aob_ranges: Vec<JAobRange>,
     diagnostics: Vec<String>,
 }
 
@@ -1311,6 +1320,17 @@ fn json_report(
                     .collect(),
             })
             .collect(),
+        aob_ranges: r
+            .aob_ranges
+            .iter()
+            .map(|rg| JAobRange {
+                aob: rg.aob.clone(),
+                minted_in: rg.minted_in.clone(),
+                first: rg.first_label.clone(),
+                last: rg.last_label.clone(),
+                labels: rg.labels.clone(),
+            })
+            .collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
     };
     serde_json::to_string_pretty(&report).unwrap_or_default()
@@ -1374,6 +1394,17 @@ fn print_sig_report(r: &SigReport, opts: &SigOptions) {
     match &r.chosen {
         Some(c) => print_candidate("chosen", c),
         None => println!("[-] no safe signature found"),
+    }
+    if !r.aob_ranges.is_empty() {
+        println!("    version coverage (a fresh AOB is minted where the bytes break):");
+        for rg in &r.aob_ranges {
+            let span = if rg.first_label == rg.last_label {
+                rg.first_label.clone()
+            } else {
+                format!("{} .. {}", rg.first_label, rg.last_label)
+            };
+            println!("      {span}  ({} build(s)):  {}", rg.labels.len(), rg.aob);
+        }
     }
     for c in &r.alternates {
         print_candidate("alt", c);
@@ -1771,6 +1802,7 @@ mod tests {
             alternates: vec![cand.clone()],
             rejected: vec![cand],
             shortlists: Vec::new(),
+            aob_ranges: Vec::new(),
             diagnostics: Vec::new(),
         };
         let json = json_report(&report, &[], 0, &[], None);
@@ -1803,6 +1835,7 @@ mod tests {
             alternates: Vec::new(),
             rejected: Vec::new(),
             shortlists: Vec::new(),
+            aob_ranges: Vec::new(),
             diagnostics: Vec::new(),
         };
         let hits = [
