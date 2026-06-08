@@ -314,6 +314,16 @@ function reportInnerHtml(r) {
       .join("");
   }
   html += r.chosen ? sigCandCard(r.chosen, t("sig.chosen"), true) : `<div class="insp-hint">${t("sig.none")}</div>`;
+  if (r.aob_ranges && r.aob_ranges.length) {
+    html += `<div class="sig-section-h">${t("sig.aobRanges")}</div>`;
+    html += r.aob_ranges
+      .map((rg) => {
+        const span = rg.first === rg.last ? esc(rg.first) : `${esc(rg.first)} … ${esc(rg.last)}`;
+        return `<div class="sig-anchor"><span class="muted">${span} · ${rg.labels.length}</span> <code class="mono">${esc(rg.aob)}</code><button class="icon-btn sig-copy" data-aob="${escAttr(rg.aob)}" title="${escAttr(t("sig.copy"))}">⧉</button></div>`;
+      })
+      .join("");
+    html += `<div class="insp-hint">${esc(t("sig.aobRangesHint"))}</div>`;
+  }
   if (r.alternates.length) {
     html += `<div class="sig-section-h">${t("sig.alternates")}</div>` + r.alternates.map((c) => sigCandCard(c, "", false)).join("");
   }

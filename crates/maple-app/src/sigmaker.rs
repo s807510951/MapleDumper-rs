@@ -111,6 +111,15 @@ struct NegSummaryView {
 }
 
 #[derive(Serialize)]
+struct AobRangeView {
+    aob: String,
+    minted_in: String,
+    first: String,
+    last: String,
+    labels: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct SigReportView {
     arch: String,
     unique_builds: usize,
@@ -119,6 +128,7 @@ struct SigReportView {
     chosen: Option<SigCandView>,
     alternates: Vec<SigCandView>,
     rejected: Vec<SigCandView>,
+    aob_ranges: Vec<AobRangeView>,
     diagnostics: Vec<String>,
     holdout: Vec<SigHoldoutView>,
     string_anchor: Option<String>,
@@ -217,6 +227,17 @@ fn sig_report_view(r: &SigReport) -> SigReportView {
         chosen: r.chosen.as_ref().map(sig_cand_view),
         alternates: r.alternates.iter().map(sig_cand_view).collect(),
         rejected: r.rejected.iter().map(sig_cand_view).collect(),
+        aob_ranges: r
+            .aob_ranges
+            .iter()
+            .map(|rg| AobRangeView {
+                aob: rg.aob.clone(),
+                minted_in: rg.minted_in.clone(),
+                first: rg.first_label.clone(),
+                last: rg.last_label.clone(),
+                labels: rg.labels.clone(),
+            })
+            .collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
         holdout: Vec::new(),
         string_anchor: None,
