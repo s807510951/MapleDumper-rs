@@ -1,6 +1,10 @@
 const invoke = window.__TAURI__.core.invoke;
 const $ = (id) => document.getElementById(id);
 
+// Returns the localized string with {param} placeholders substituted RAW (not HTML-escaped), so it
+// is safe to assign to textContent. A caller that puts a t(...) result with interpolated params into
+// innerHTML must wrap it in esc() first; backend/user values rendered into innerHTML are escaped at
+// the render site (see the workspace/history/sigmaker render paths), not here.
 function t(key, params) {
   const table = I18N[LANG] || I18N.en;
   let s = table[key] != null ? table[key] : I18N.en[key] != null ? I18N.en[key] : key;
