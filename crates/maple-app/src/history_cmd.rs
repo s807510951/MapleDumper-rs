@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::Serialize;
 
 use maple_core::Finding;
-use maple_core::output::{cheat_table, offsets_header, plain_text};
+use maple_core::output::export;
 
 use crate::diff::{DiffView, build_diff_view};
 use crate::history;
@@ -148,11 +148,7 @@ pub fn history_export(
         16,
     )
     .unwrap_or(0);
-    Ok(match format.as_str() {
-        "header" => offsets_header(&findings, &meta.module, base),
-        "ce" => cheat_table(&findings, &meta.module),
-        _ => plain_text(&findings, &meta.module, base, None),
-    })
+    Ok(export(&findings, &meta.module, base, None, &format))
 }
 
 #[tauri::command]

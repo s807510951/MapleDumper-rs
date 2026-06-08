@@ -108,6 +108,24 @@ pub fn plain_text(
     out
 }
 
+/// Render findings in the requested format: `"header"` (C/C++ header), `"ce"` (Cheat Engine table),
+/// or anything else as a plain-text dump. The single dispatch point for format selection, so the
+/// CLI and the desktop app cannot drift on what each format name produces.
+#[must_use]
+pub fn export(
+    findings: &[Finding],
+    module_name: &str,
+    module_base: u64,
+    extra_header: Option<&str>,
+    format: &str,
+) -> String {
+    match format {
+        "header" => offsets_header(findings, module_name, module_base),
+        "ce" => cheat_table(findings, module_name),
+        _ => plain_text(findings, module_name, module_base, extra_header),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +161,29 @@ mod tests {
         assert!(h.contains("namespace offsets"));
         assert!(h.contains("Hp = 0x40"));
         assert!(h.contains("#pragma once"));
+    }
+
+    #[test]
+    fn export_dispatches_to_each_format_writer() {
+        // ARCH-6: the single export dispatcher must produce exactly what the individual writers do,
+        // so the CLI and the app cannot drift on what a format name means.
+        let findings = vec![
+            f("Func", "functions", 0x1234, false),
+            f("HpOff", "offsets", 0x40, true),
+        ];
+        let (m, b, h) = ("MapleStory.exe", 0x1_4000_0000u64, "build 1.2.3");
+        assert_eq!(
+            export(&findings, m, b, Some(h), "header"),
+            offsets_header(&findings, m, b)
+        );
+        assert_eq!(
+            export(&findings, m, b, Some(h), "ce"),
+            cheat_table(&findings, m)
+        );
+        assert_eq!(
+            export(&findings, m, b, Some(h), "txt"),
+            plain_text(&findings, m, b, Some(h))
+        );
     }
 
     #[test]

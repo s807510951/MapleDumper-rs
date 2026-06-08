@@ -6,7 +6,7 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
-use maple_core::output::{cheat_table, offsets_header, plain_text};
+use maple_core::output::{export, offsets_header};
 use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file, parse_patterns_file_strict};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
@@ -331,11 +331,7 @@ fn parse_hex_opt(field: &Option<String>) -> Result<Option<usize>, String> {
 }
 
 fn parse_arch(s: &str) -> Result<Arch, String> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "64" | "x64" | "amd64" | "x86_64" | "x86-64" => Ok(Arch::X64),
-        "32" | "x86" | "i386" | "x86_32" => Ok(Arch::X86),
-        other => Err(format!("invalid arch '{other}' (use 32 or 64)")),
-    }
+    Arch::parse(s)
 }
 
 fn parse_config(text: &str, label: &str) -> Result<Config, String> {
@@ -558,11 +554,13 @@ fn write_outputs(
 
     let header = stamp.map(BuildStamp::header_line);
     let update = out.join("update.txt");
-    let contents = if ce {
-        cheat_table(&result.findings, module)
-    } else {
-        plain_text(&result.findings, module, base, header.as_deref())
-    };
+    let contents = export(
+        &result.findings,
+        module,
+        base,
+        header.as_deref(),
+        if ce { "ce" } else { "txt" },
+    );
     if !quiet && update.exists() {
         eprintln!("[i] overwriting existing {}", update.display());
     }

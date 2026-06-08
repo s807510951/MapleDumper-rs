@@ -9,6 +9,19 @@ pub enum Arch {
     X64,
 }
 
+impl Arch {
+    /// Parse an architecture name from the common spellings, rejecting anything else with a clear
+    /// message. The single validating parser shared by the CLI and the desktop app, so a typo is an
+    /// error rather than a silent default to one bitness.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "64" | "x64" | "amd64" | "x86_64" | "x86-64" => Ok(Arch::X64),
+            "32" | "x86" | "i386" | "x86_32" => Ok(Arch::X86),
+            other => Err(format!("invalid arch '{other}' (use 32 or 64)")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signature {
     pub bytes: Vec<u8>,
@@ -566,6 +579,20 @@ pub fn parse_patterns_file_strict(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arch_parse_accepts_known_spellings_and_rejects_typos() {
+        for s in ["64", "x64", "AMD64", "x86_64", "x86-64"] {
+            assert_eq!(Arch::parse(s), Ok(Arch::X64), "{s}");
+        }
+        for s in ["32", "x86", "i386", " X86_32 "] {
+            assert_eq!(Arch::parse(s), Ok(Arch::X86), "{s}");
+        }
+        // A typo must be an error, not a silent default to one bitness (ARCH-6).
+        assert!(Arch::parse("garbage").is_err());
+        assert!(Arch::parse("").is_err());
+        assert!(Arch::parse("6").is_err());
+    }
 
     fn names(patterns: &[Pattern]) -> Vec<&str> {
         patterns.iter().map(|p| p.name.as_str()).collect()
