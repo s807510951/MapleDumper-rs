@@ -114,6 +114,11 @@ const driver = `
     { base: "0x1000", size: 4096, findings: 3 }, { base: "0x5000", size: 2048, findings: 1 },
   ] });
   globalThis.__scanDiag = document.getElementById("scan-diag").innerHTML;
+  state.rows = [
+    { name: "EscRow", category: "globals", type: "pointer", value: "0x10<script>", is_offset: false, matches: 1, status: "found", note: "", pattern: "AA BB", confidence: null, trace: "", candidates: [] },
+  ];
+  renderResults();
+  globalThis.__wsBody = document.getElementById("w-body").innerHTML;
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
@@ -184,6 +189,9 @@ const scanDiag = sandbox.__scanDiag || "";
 check(scanDiag.includes("Job timeline") && scanDiag.includes("Section map"), "scan diagnostics panels missing");
 check(scanDiag.includes("0x1000") && scanDiag.includes("0x5000"), "section map regions missing");
 check(scanDiag.includes("tl-attach") && scanDiag.includes("tl-scan"), "job timeline segments missing");
+const wsBody = sandbox.__wsBody || "";
+check(wsBody.includes("0x10&lt;script&gt;"), "workspace value must be HTML-escaped (SEC-4)");
+check(!wsBody.includes("0x10<script>"), "workspace value must not render a raw unescaped tag (SEC-4)");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");

@@ -63,7 +63,7 @@ function renderResults() {
   body.innerHTML = rows
     .map((r) => {
       const pct = (r.matches / maxHits) * 100;
-      const value = r.value ? `<span class="mono d-addr">${r.value}</span>` : '<span class="muted"></span>';
+      const value = r.value ? `<span class="mono d-addr">${esc(r.value)}</span>` : '<span class="muted"></span>';
       return `<tr data-name="${esc(r.name)}" class="${state.selected === r.name ? "selected" : ""}">
         <td><div class="name-cell"><span class="dot-acc ${accentClass(r)}"></span>
           <div><div class="name-main d-name">${esc(r.name)}</div><div class="name-sub d-cat">${esc(r.category)}</div></div></div></td>

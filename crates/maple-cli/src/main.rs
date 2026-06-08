@@ -563,6 +563,9 @@ fn write_outputs(
     } else {
         plain_text(&result.findings, module, base, header.as_deref())
     };
+    if !quiet && update.exists() {
+        eprintln!("[i] overwriting existing {}", update.display());
+    }
     std::fs::write(&update, contents).map_err(|e| format!("write {}: {e}", update.display()))?;
     if !quiet {
         println!("[+] wrote {}", update.display());
@@ -570,6 +573,9 @@ fn write_outputs(
 
     if offsets {
         let header = out.join("offsets.h");
+        if !quiet && header.exists() {
+            eprintln!("[i] overwriting existing {}", header.display());
+        }
         std::fs::write(&header, offsets_header(&result.findings, module, base))
             .map_err(|e| format!("write {}: {e}", header.display()))?;
         if !quiet {
