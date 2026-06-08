@@ -5054,4 +5054,114 @@ mod tests {
             );
         }
     }
+
+    // Grade calibration on the real corpus (run with `--ignored`): generate a cross-version signature
+    // for a sample of v83 functions, bucket the chosen candidate by its grade, and measure how often
+    // each grade's signature still uniquely matches a held-out build (leave-one-out). A well-calibrated
+    // grade ladder has A re-resolving more reliably than B, B than C, and so on. This is the measured
+    // evidence the scoring-methodology questions (PSE-5 correlated evidence, PSE-6 band cliff) need
+    // before any grade-changing recalibration: it quantifies whether the current grades predict
+    // cross-version survival, so a change can be shown to improve calibration rather than just move it.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    #[allow(clippy::too_many_lines)]
+    fn scoring_grade_calibration_on_real_gms() {
+        use crate::fileimage::FileImage;
+        use std::collections::{BTreeMap, BTreeSet};
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let names = [
+            "GMS_v83.1_U_DEVM.exe",
+            "GMS_v84.1_U_DEVM.exe",
+            "GMS_v88.1_U_DEVM.exe",
+            "GMS_v91.1_U_DEVM.exe",
+            "GMS_v95.1_U_DEVM.exe",
+        ];
+        if names.iter().any(|n| !dir.join(n).exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let imgs: Vec<FileImage> = names
+            .iter()
+            .map(|n| FileImage::open(&dir.join(n)).unwrap())
+            .collect();
+        let labels = ["v83", "v84", "v88", "v91", "v95.1"];
+        let inputs: Vec<ImageInput> = labels.iter().zip(&imgs).map(|(l, i)| mk(l, i)).collect();
+        let opts = SigOptions::default();
+
+        let rf = &inputs[0];
+        let mut entries: BTreeSet<usize> = BTreeSet::new();
+        for r in &rf.code_regions {
+            let bytes = read_region(rf.source, r.base, r.size);
+            for (i, w) in bytes.windows(5).enumerate() {
+                if w[0] == 0xE8 {
+                    let rel = i32::from_le_bytes([w[1], w[2], w[3], w[4]]) as i64;
+                    let t = (r.base + i + 5) as i64 + rel - rf.base as i64;
+                    if t > 0x1000 && (t as usize) < rf.size {
+                        entries.insert(t as usize);
+                    }
+                }
+            }
+        }
+        let entries: Vec<usize> = entries.into_iter().collect();
+        const N: usize = 40;
+        let step = (entries.len() / N).max(1);
+        let sample: Vec<usize> = entries.iter().copied().step_by(step).take(N).collect();
+
+        // grade -> (signatures, holdout builds tested, holdout builds re-resolved)
+        let mut by_grade: BTreeMap<char, (usize, usize, usize)> = BTreeMap::new();
+        for &e in &sample {
+            let spec = TargetSpec::Ref {
+                image: 0,
+                rva: e as u64,
+            };
+            let report = generate(&inputs, &spec, &opts);
+            let Some(chosen) = &report.chosen else {
+                continue;
+            };
+            let hold = holdout_validate(&inputs, &spec, &opts);
+            let total = hold.iter().filter(|h| h.generated).count();
+            let matched = hold.iter().filter(|h| h.matched_holdout).count();
+            let entry = by_grade.entry(chosen.grade.letter()).or_default();
+            entry.0 += 1;
+            entry.1 += total;
+            entry.2 += matched;
+        }
+
+        eprintln!(
+            "\n=== grade calibration (GMS v83 -> v84/v88/v91/v95.1), {} sampled ===",
+            sample.len()
+        );
+        eprintln!("  grade  sigs  holdout re-resolved");
+        for (g, (n, tot, mat)) in &by_grade {
+            let pct = if *tot == 0 {
+                "n/a".to_string()
+            } else {
+                format!("{:.0}%", 100.0 * (*mat as f64) / (*tot as f64))
+            };
+            eprintln!("  {g}      {n:>4}  {mat}/{tot} ({pct})");
+        }
+        assert!(
+            by_grade.values().map(|v| v.0).sum::<usize>() > 0,
+            "expected at least one generated signature"
+        );
+    }
 }
