@@ -12,3 +12,7 @@ crates/maple-app/gen/
 
 # Local-only documentation suite (kept off the remote)
 docs/
+
+# Local-only scratch prompts and notes (kept off the remote)
+/mapledumper_*_prompt.md
+/*.scratch.md
