@@ -47,8 +47,10 @@ fn bitness(arch: Arch) -> u32 {
     if matches!(arch, Arch::X64) { 64 } else { 32 }
 }
 
-fn rel32(bytes: &[u8], at: usize) -> i32 {
-    i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+fn rel32(bytes: &[u8], at: usize) -> Option<i32> {
+    bytes
+        .get(at..at + 4)
+        .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
 }
 
 #[must_use]
@@ -56,7 +58,7 @@ pub fn decode_rel_target(bytes: &[u8], ip: usize) -> Option<usize> {
     if bytes.len() >= 5 && (bytes[0] == 0xE8 || bytes[0] == 0xE9) {
         return Some(
             ip.wrapping_add(5)
-                .wrapping_add_signed(rel32(bytes, 1) as isize),
+                .wrapping_add_signed(rel32(bytes, 1)? as isize),
         );
     }
     if bytes.len() >= 2 && bytes[0] == 0xEB {
@@ -68,7 +70,7 @@ pub fn decode_rel_target(bytes: &[u8], ip: usize) -> Option<usize> {
     if bytes.len() >= 6 && bytes[0] == 0x0F && (0x80..=0x8F).contains(&bytes[1]) {
         return Some(
             ip.wrapping_add(6)
-                .wrapping_add_signed(rel32(bytes, 2) as isize),
+                .wrapping_add_signed(rel32(bytes, 2)? as isize),
         );
     }
     if bytes.len() >= 2 && (0x70..=0x7F).contains(&bytes[0]) {
@@ -151,7 +153,7 @@ fn offset_x64(p: &[u8]) -> Option<u32> {
         }
         match modrm >> 6 {
             1 => return Some(u32::from(p[3])),
-            2 if p.len() >= 7 => return Some(rel32(p, 3) as u32),
+            2 if p.len() >= 7 => return Some(rel32(p, 3)? as u32),
             _ => {}
         }
     }
@@ -168,7 +170,7 @@ fn offset_x86(p: &[u8]) -> Option<u32> {
     }
     match modrm >> 6 {
         1 => Some(u32::from(p[2])),
-        2 if p.len() >= 6 => Some(rel32(p, 2) as u32),
+        2 if p.len() >= 6 => Some(rel32(p, 2)? as u32),
         _ => None,
     }
 }
@@ -199,7 +201,7 @@ fn immediate_at(p: &[u8]) -> Option<u32> {
         return None;
     }
     if (0xB8..=0xBF).contains(&rest[0]) && rest.len() >= 5 {
-        return Some(rel32(rest, 1) as u32);
+        return Some(rel32(rest, 1)? as u32);
     }
     if rest[0] == 0xC7 && rest.len() >= 2 && (rest[1] >> 3) & 0x07 == 0 {
         let imm_off = match rest[1] >> 6 {
@@ -208,7 +210,7 @@ fn immediate_at(p: &[u8]) -> Option<u32> {
             _ => return None,
         };
         if rest.len() >= imm_off + 4 {
-            return Some(rel32(rest, imm_off) as u32);
+            return Some(rel32(rest, imm_off)? as u32);
         }
     }
     None
