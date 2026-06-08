@@ -111,6 +111,18 @@ pub fn plain_text(
 /// Render findings in the requested format: `"header"` (C/C++ header), `"ce"` (Cheat Engine table),
 /// or anything else as a plain-text dump. The single dispatch point for format selection, so the
 /// CLI and the desktop app cannot drift on what each format name produces.
+///
+/// ```
+/// use maple_core::{Finding, output::export};
+/// let findings = vec![Finding {
+///     name: "Hp".into(),
+///     category: "offsets".into(),
+///     value: 0x40,
+///     is_offset: true,
+/// }];
+/// let table = export(&findings, "Game.exe", 0x400000, None, "ce");
+/// assert!(table.contains("define(Hp, 0x40)"));
+/// ```
 #[must_use]
 pub fn export(
     findings: &[Finding],
