@@ -340,6 +340,22 @@ pub struct Shortlist {
     pub entries: Vec<ShortlistEntry>,
 }
 
+/// One contiguous run of builds a single byte signature stays valid across, before a recompile moves
+/// the bytes and a fresh signature has to be minted for the next run. Reporting these ranges is how a
+/// relocated signature answers "which versions does this AOB work for, and where does it break".
+#[derive(Clone, Debug)]
+pub struct AobRange {
+    /// The byte signature that matches every build in this run at the function's relocated address.
+    pub aob: String,
+    /// The build whose bytes this signature was minted from (the first of the run).
+    pub minted_in: String,
+    /// First and last build labels of the run, for a compact "v83..v88" presentation.
+    pub first_label: String,
+    pub last_label: String,
+    /// Every build in the run, in order.
+    pub labels: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SigReport {
     pub arch: Arch,
@@ -352,5 +368,10 @@ pub struct SigReport {
     /// Per-build candidate shortlists, populated only when no confident signature could be produced
     /// and the target looks like one of a family of structural near-duplicates.
     pub shortlists: Vec<Shortlist>,
+    /// For a relocated signature whose bytes do not survive every build unchanged, the contiguous
+    /// version runs each minted AOB covers (so the report can say "works v83..v88, then this AOB for
+    /// v91..v95"). Empty when the chosen signature is a single cross-build byte pattern or nothing was
+    /// chosen.
+    pub aob_ranges: Vec<AobRange>,
     pub diagnostics: Vec<Diag>,
 }

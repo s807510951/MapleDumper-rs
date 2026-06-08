@@ -290,6 +290,7 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
 mod encoding;
 mod identity;
 mod imports;
+mod vtable;
 pub use identity::*;
 
 /// Mint a byte signature unique within a SINGLE build at `rva`, masking operand and relocated bytes
@@ -504,6 +505,312 @@ fn import_relocate(
         reasons,
         per_version,
         diags: Vec::new(),
+    })
+}
+
+// Vtable-relocation gates. The structural agreement of the whole table is strong evidence, so the
+// agreement floor is high; the margin rejects two sibling classes that share enough base-class slots to
+// tie (which must decline, not be guessed between).
+const VT_MIN_AGREEMENT: f64 = 0.72;
+const VT_MIN_MARGIN: f64 = 0.10;
+// A relocated method whose identity drifted further than this from the reference is treated as a wrong
+// landing (a coincidental table match), even though the table agreed. The floor is low on purpose: the
+// whole point is to relocate methods whose own bytes churned, so only a gross mismatch is rejected.
+const VT_MIN_CONSISTENCY: f64 = 0.30;
+
+// Push every confident relocation edge from an already-located build `anchor` (located at confidence
+// `lconf`) to each not-yet-located required build into the frontier. An edge survives only if the table
+// match clears the agreement and margin gates AND the landed method still resembles the IMMUTABLE
+// source (not the previous hop), so a chain cannot drift method-by-method onto a neighbour. The edge's
+// confidence is the path bottleneck so far, min(lconf, this hop's agreement).
+fn push_vtable_edges(
+    images: &[ImageInput],
+    required: &[usize],
+    src_ident: &FnIdentity,
+    anchor: &vtable::VtableAnchor,
+    lconf: f64,
+    located: &[Option<(u64, f64)>],
+    frontier: &mut Vec<(usize, u64, f64)>,
+) {
+    for &v in required {
+        if located[v].is_some() {
+            continue;
+        }
+        let Some((rva, agree, runner)) = vtable::resolve_vtable_anchor(&images[v], anchor) else {
+            continue;
+        };
+        if agree >= VT_MIN_AGREEMENT
+            && agree - runner >= VT_MIN_MARGIN
+            && fn_identity(&images[v], rva).similarity(src_ident) >= VT_MIN_CONSISTENCY
+        {
+            frontier.push((v, rva as u64, lconf.min(agree)));
+        }
+    }
+}
+
+/// Relocate the method at `ref_rva` from build `ref_idx` to every other required build by the
+/// maximum-bottleneck (widest) path through the build graph. Starting from the reference (confidence
+/// 1.0), each newly located build re-anchors and offers edges to the rest; a build is then taken by the
+/// highest-confidence path that reaches it, so a long version jump is crossed as a chain of short,
+/// high-confidence hops rather than one low-confidence leap. A path's confidence is its weakest hop (a
+/// chain is only as sure as its worst link). Returns, per build, the located RVA and the path's
+/// bottleneck confidence, or `None` for a build no gated path reaches. This is the data-driven
+/// generalisation of "diff v83->v84, then v84->v88, ...": the chain follows measured similarity, not an
+/// assumed version order, so it routes around a hop that a refactor made unexpectedly hard. x86 vtable
+/// methods only.
+fn vtable_relocate_path(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+) -> Vec<Option<(u64, f64)>> {
+    let mut located: Vec<Option<(u64, f64)>> = vec![None; images.len()];
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let Some(ref_anchor) = vtable::make_vtable_anchor(&images[ref_idx], entry) else {
+        return located;
+    };
+    let src_ident = fn_identity(&images[ref_idx], entry);
+    located[ref_idx] = Some((entry as u64, 1.0));
+    let mut frontier: Vec<(usize, u64, f64)> = Vec::new();
+    push_vtable_edges(
+        images,
+        required,
+        &src_ident,
+        &ref_anchor,
+        1.0,
+        &located,
+        &mut frontier,
+    );
+    loop {
+        // The widest still-open edge: the highest-confidence frontier edge to a build not yet located.
+        let mut pick: Option<usize> = None;
+        let mut pick_conf = -1.0;
+        for (k, &(v, _, c)) in frontier.iter().enumerate() {
+            if located[v].is_none() && c > pick_conf {
+                pick_conf = c;
+                pick = Some(k);
+            }
+        }
+        let Some(k) = pick else { break };
+        let (v, rva, conf) = frontier[k];
+        located[v] = Some((rva, conf));
+        // Re-anchor in the newly located build to carry the chain forward, then offer its edges.
+        if let Some(anchor) = vtable::make_vtable_anchor(&images[v], rva as usize) {
+            push_vtable_edges(
+                images,
+                required,
+                &src_ident,
+                &anchor,
+                conf,
+                &located,
+                &mut frontier,
+            );
+        }
+    }
+    located
+}
+
+/// Whether `aob` matches build `img` exactly once and that one match is at `rva`. The match-at-RVA
+/// requirement is essential: a pattern that happens to be unique elsewhere is a different function that
+/// coincidentally shares the bytes, and extending a version range onto it would report a wrong address.
+fn aob_unique_at(img: &ImageInput, aob: &str, rva: usize) -> bool {
+    let Ok(sig) = try_signature_from_aob(aob) else {
+        return false;
+    };
+    let Some(pat) = CompiledPattern::new(&sig) else {
+        return false;
+    };
+    let (count, first) = CodeCache::build(img).locate(&pat);
+    count == 1 && first == Some(rva as u64)
+}
+
+/// Collapse a relocation's per-build minted AOBs into contiguous version ranges. Walking builds in
+/// order, the current range's AOB is carried forward as long as it still matches the next build at that
+/// build's relocated address; when it stops (a recompile moved the bytes) or a build was not reached,
+/// the run closes and the next reached build's freshly minted AOB starts a new run. The result is the
+/// "AOB X works v83..v88, AOB Y works v91..v95" story, derived purely from `resolved_target_rva`, so it
+/// works for any anchor type, not just vtables.
+fn collapse_aob_ranges(images: &[ImageInput], per_version: &[PerVersion]) -> Vec<AobRange> {
+    let mut ranges: Vec<AobRange> = Vec::new();
+    let mut cur: Option<(String, String, Vec<String>)> = None; // (aob, minted_in, labels)
+    let close = |cur: Option<(String, String, Vec<String>)>, ranges: &mut Vec<AobRange>| {
+        if let Some((aob, minted_in, labels)) = cur {
+            ranges.push(AobRange {
+                aob,
+                minted_in,
+                first_label: labels.first().cloned().unwrap_or_default(),
+                last_label: labels.last().cloned().unwrap_or_default(),
+                labels,
+            });
+        }
+    };
+    for pv in per_version {
+        let (Some(rva), Some(aob)) = (pv.resolved_target_rva, pv.aob.as_ref()) else {
+            close(cur.take(), &mut ranges);
+            continue;
+        };
+        let Some(im) = images.iter().find(|i| i.label == pv.label) else {
+            // An unresolvable label breaks contiguity rather than silently bridging the two sides.
+            close(cur.take(), &mut ranges);
+            continue;
+        };
+        let extend = cur
+            .as_ref()
+            .is_some_and(|(a, _, _)| aob_unique_at(im, a, rva as usize));
+        if extend {
+            cur.as_mut().unwrap().2.push(pv.label.clone());
+        } else {
+            close(cur.take(), &mut ranges);
+            cur = Some((aob.clone(), pv.label.clone(), vec![pv.label.clone()]));
+        }
+    }
+    close(cur.take(), &mut ranges);
+    ranges
+}
+
+/// Cross-version relocation by C++ vtable structure, for a virtual method with no distinctive string or
+/// import set of its own. The vtable the method is dispatched from is matched across builds under a
+/// semi-global affine alignment of its per-slot fingerprints (so methods inserted or removed across
+/// versions shift the match instead of breaking it), weighted toward the class-specific methods so a
+/// sibling sharing only the inherited backbone cannot tie. The target slot is then read, any adjustor
+/// thunk followed, and a fresh per-build AOB minted. Builds are reached over the maximum-confidence
+/// chain through intermediate versions, and coverage is PARTIAL by design: the method is pinned in
+/// every build a confident path reaches and reported unreached in the rest, instead of the whole
+/// relocation failing because one late build diverged. Emits when the reference plus at least one other
+/// build are pinned and the relocated methods agree. x86 / PE32 only. See [`vtable`].
+fn vtable_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+    opts: &SigOptions,
+) -> Option<SigCandidate> {
+    if !matches!(images[ref_idx].arch, Arch::X86) {
+        return None;
+    }
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let anchor = vtable::make_vtable_anchor(&images[ref_idx], entry)?;
+    let located = vtable_relocate_path(images, required, ref_idx, ref_rva);
+
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut idents: Vec<Option<FnIdentity>> = Vec::with_capacity(required.len());
+    let mut diags: Vec<Diag> = Vec::new();
+    let mut min_conf = 1.0f64;
+    let mut reached = 0usize;
+    for &idx in required {
+        match located[idx] {
+            Some((rva, conf)) => {
+                reached += 1;
+                if idx != ref_idx {
+                    min_conf = min_conf.min(conf);
+                }
+                idents.push(Some(fn_identity(&images[idx], rva as usize)));
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: Some(rva),
+                    resolved_target_rva: Some(rva),
+                    target_kind: Some(TargetKind::Code),
+                    fingerprint_similarity: None,
+                    aob: single_build_aob(&images[idx], rva as usize, opts),
+                });
+            }
+            None => {
+                diags.push(Diag::MissingInImage {
+                    label: images[idx].label.clone(),
+                });
+                idents.push(None);
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: None,
+                    resolved_target_rva: None,
+                    target_kind: None,
+                    fingerprint_similarity: None,
+                    aob: None,
+                });
+            }
+        }
+    }
+    // The reference plus at least one other build are needed to claim a cross-version relocation.
+    if reached < 2 {
+        return None;
+    }
+    // Per-build similarity to the reference's own relocated identity, and the mutual-consistency gate
+    // over the builds that were reached (a coincidental table collision on a different method is cut).
+    let ref_ident = required
+        .iter()
+        .position(|&i| i == ref_idx)
+        .and_then(|p| idents[p].clone());
+    for (pv, id) in per_version.iter_mut().zip(&idents) {
+        if let (Some(id), Some(rid)) = (id, &ref_ident) {
+            pv.fingerprint_similarity = Some(rid.similarity(id));
+        }
+    }
+    let reached_idents: Vec<FnIdentity> = idents.iter().flatten().cloned().collect();
+    let mutual = scoring::callee_similarity(&reached_idents).unwrap_or(1.0);
+    if mutual < VT_MIN_CONSISTENCY {
+        return None;
+    }
+
+    // A compact, stable identity label (not a re-scannable byte pattern): slot count, target slot, and a
+    // fold of the reference table's per-slot fingerprint.
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for slot in &anchor.fingerprint {
+        for &m in slot {
+            h ^= u64::from(m);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    let aob = format!(
+        "@vtable={}:{}:{:016X}",
+        anchor.fingerprint.len(),
+        anchor.slot,
+        h
+    );
+
+    let ev = scoring::FingerprintEvidence {
+        builds: reached,
+        min_similarity: min_conf,
+        mutual_similarity: mutual,
+        ref_ident: ref_ident.clone(),
+    };
+    let (scores, mut reasons) = scoring::score_fingerprint(&ev);
+    reasons.insert(
+        0,
+        format!(
+            "relocated to {reached} of {} builds by matching its C++ vtable structure ({} slots), reading slot {}{}",
+            required.len(),
+            anchor.fingerprint.len(),
+            anchor.slot,
+            if anchor.via_thunk {
+                " through an adjustor thunk"
+            } else {
+                ""
+            }
+        ),
+    );
+    if reached < required.len() {
+        reasons.push(format!(
+            "{} build(s) could not be reached by a confident chain and are left unpinned",
+            required.len() - reached
+        ));
+    }
+    // Structural match located in the other builds by table shape, backed by the reference build's
+    // bytes but not by a re-scannable cross-build byte/string, so capped at B however high it scores.
+    let grade = scoring::grade_from(scores.final_score, false, false).max_rank(Grade::B);
+    Some(SigCandidate {
+        aob,
+        suffix: Suffix::None,
+        grade,
+        score: scores.final_score,
+        bytes_len: 0,
+        fixed: 0,
+        wildcards: 0,
+        fixed_ratio: 0.0,
+        reloc_safe: true,
+        scores,
+        reasons,
+        per_version,
+        diags,
     })
 }
 
@@ -1245,6 +1552,7 @@ pub fn generate_with_progress(
         alternates: Vec::new(),
         rejected: Vec::new(),
         shortlists: Vec::new(),
+        aob_ranges: Vec::new(),
         diagnostics,
     };
 
@@ -1411,17 +1719,20 @@ pub fn generate_with_progress(
     if pool.is_empty() {
         // Fallbacks for when no byte signature could be hardened across the builds, tried in order of
         // strength: a recompile-stable string anchor first; then an import-set anchor (a distinctive
-        // set of imported APIs is just as recompile-stable as a string); then an encoding fingerprint,
-        // which pins the exact template instance the mnemonic fingerprint only ties on; then the
-        // fuzzier mnemonic fingerprint as a last resort. Each relocated build is handed a freshly
-        // minted per-build AOB; none emit a byte/string the resolver can re-scan for as a cross-build
-        // pattern, so all are capped below the byte anchors.
+        // set of imported APIs is just as recompile-stable as a string); then a C++ vtable-structure
+        // match, which relocates a virtual method by the class it belongs to; then an encoding
+        // fingerprint, which pins the exact template instance the mnemonic fingerprint only ties on;
+        // then the fuzzier mnemonic fingerprint as a last resort. Each relocated build is handed a
+        // freshly minted per-build AOB; none emit a byte/string the resolver can re-scan for as a
+        // cross-build pattern, so all are capped below the byte anchors.
         if let Some(anchor_cand) =
             string_anchor_candidate(images, &required, ref_idx, ref_rva, opts)
         {
             pool.push(anchor_cand);
         } else if let Some(imp_cand) = import_relocate(images, &required, ref_idx, ref_rva, opts) {
             pool.push(imp_cand);
+        } else if let Some(vt_cand) = vtable_relocate(images, &required, ref_idx, ref_rva, opts) {
+            pool.push(vt_cand);
         } else if let Some(enc_cand) = encoding_relocate(images, &required, ref_idx, ref_rva, opts)
         {
             pool.push(enc_cand);
@@ -1450,6 +1761,33 @@ pub fn generate_with_progress(
             ))
     });
     let chosen = (!pool.is_empty()).then(|| pool.remove(0));
+    // Collapse the chosen signature's per-build coverage into contiguous version ranges: a single
+    // re-scannable byte pattern is one range over every build it matches, while a relocated signature
+    // (whose bytes a recompile moves) becomes one range per minted AOB, reporting exactly where the old
+    // bytes break and which fresh AOB takes over for the next span.
+    let aob_ranges = match &chosen {
+        Some(c) if try_signature_from_aob(&c.aob).is_ok() => {
+            let labels: Vec<String> = c
+                .per_version
+                .iter()
+                .filter(|p| p.match_rva.is_some())
+                .map(|p| p.label.clone())
+                .collect();
+            if labels.is_empty() {
+                Vec::new()
+            } else {
+                vec![AobRange {
+                    aob: c.aob.clone(),
+                    minted_in: labels[0].clone(),
+                    first_label: labels[0].clone(),
+                    last_label: labels[labels.len() - 1].clone(),
+                    labels,
+                }]
+            }
+        }
+        Some(c) => collapse_aob_ranges(images, &c.per_version),
+        None => Vec::new(),
+    };
     let alternates = pool;
     // When nothing could be pinned, fall back to a per-build shortlist of the structural family so the
     // user gets candidates to disambiguate instead of an empty result.
@@ -1475,6 +1813,7 @@ pub fn generate_with_progress(
         alternates,
         rejected,
         shortlists,
+        aob_ranges,
         diagnostics,
     }
 }
@@ -1636,6 +1975,77 @@ mod tests {
             pack_reasons: Vec::new(),
             reloc: None,
         }
+    }
+
+    #[test]
+    fn collapse_aob_ranges_groups_builds_until_the_bytes_break() {
+        // A and B carry the same bytes at the relocated address, C diverges: the first AOB must cover
+        // A and B as one range, then a fresh AOB opens a new range at C.
+        fn buf_with(pat: &[u8], at: usize) -> Vec<u8> {
+            let mut b = vec![0u8; 0x100];
+            b[at..at + pat.len()].copy_from_slice(pat);
+            b
+        }
+        let dead = [0xDE, 0xAD, 0xBE, 0xEF];
+        let cafe = [0xCA, 0xFE, 0xBA, 0xBE];
+        let sa = BufferSource::new(0x1000, buf_with(&dead, 0x10));
+        let sb = BufferSource::new(0x1000, buf_with(&dead, 0x20));
+        let sc = BufferSource::new(0x1000, buf_with(&cafe, 0x30));
+        let images = [
+            img("A", &sa, 0x1000, 0x100),
+            img("B", &sb, 0x1000, 0x100),
+            img("C", &sc, 0x1000, 0x100),
+        ];
+        let pv = |label: &str, rva: u64, aob: &str| PerVersion {
+            label: label.into(),
+            match_rva: Some(rva),
+            resolved_target_rva: Some(rva),
+            target_kind: Some(TargetKind::Code),
+            fingerprint_similarity: None,
+            aob: Some(aob.into()),
+        };
+        let per_version = vec![
+            pv("A", 0x10, "DE AD BE EF"),
+            pv("B", 0x20, "DE AD BE EF"),
+            pv("C", 0x30, "CA FE BA BE"),
+        ];
+        let ranges = collapse_aob_ranges(&images, &per_version);
+        assert_eq!(ranges.len(), 2, "two ranges: A..B then C");
+        assert_eq!(ranges[0].labels, ["A", "B"]);
+        assert_eq!(ranges[0].aob, "DE AD BE EF");
+        assert_eq!(ranges[1].labels, ["C"]);
+        assert_eq!(ranges[1].aob, "CA FE BA BE");
+    }
+
+    #[test]
+    fn collapse_aob_ranges_breaks_on_an_unreached_build() {
+        // A build with no relocated address breaks contiguity even if the bytes would have matched.
+        let dead = [0xDEu8, 0xAD, 0xBE, 0xEF];
+        let mut bytes = vec![0u8; 0x100];
+        bytes[0x10..0x14].copy_from_slice(&dead);
+        let s = BufferSource::new(0x1000, bytes);
+        let images = [img("A", &s, 0x1000, 0x100), img("B", &s, 0x1000, 0x100)];
+        let per_version = vec![
+            PerVersion {
+                label: "A".into(),
+                match_rva: Some(0x10),
+                resolved_target_rva: Some(0x10),
+                target_kind: Some(TargetKind::Code),
+                fingerprint_similarity: None,
+                aob: Some("DE AD BE EF".into()),
+            },
+            PerVersion {
+                label: "B".into(),
+                match_rva: None,
+                resolved_target_rva: None,
+                target_kind: None,
+                fingerprint_similarity: None,
+                aob: None,
+            },
+        ];
+        let ranges = collapse_aob_ranges(&images, &per_version);
+        assert_eq!(ranges.len(), 1, "only the reached build forms a range");
+        assert_eq!(ranges[0].labels, ["A"]);
     }
 
     // A small x64 blob with a rip-relative lea, a call rel32, then padding to make it unique.
@@ -3440,6 +3850,100 @@ mod tests {
             !sl.entries.is_empty(),
             "the shortlist should offer at least one v88 candidate"
         );
+    }
+
+    // The full chaining + version-range pipeline on a real clean virtual method (run with `--ignored`):
+    // a slot-0 method of the v84 0x78F16C table is relocated across the six-build GUI span by the
+    // widest-path chain, pinned where confidence holds and reported unreached past the structural break,
+    // then its per-build AOBs are collapsed into contiguous version ranges.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn vtable_relocation_reports_version_ranges_on_real_gms() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let names = [
+            "GMS_v83.1_U_DEVM.exe",
+            "GMS_v84.1_U_DEVM.exe",
+            "GMS_v88.1_U_DEVM.exe",
+            "GMS_v91.1_U_DEVM.exe",
+            "GMS_v95.1_U_DEVM.exe",
+            "GMS_v95.5_U_DEVM.exe",
+        ];
+        let paths: Vec<_> = names.iter().map(|n| dir.join(n)).collect();
+        if paths.iter().any(|p| !p.exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let imgs: Vec<FileImage> = paths.iter().map(|p| FileImage::open(p).unwrap()).collect();
+        let labels = ["v83", "v84", "v88", "v91", "v95.1", "v95.5"];
+        let inputs: Vec<ImageInput> = labels.iter().zip(&imgs).map(|(l, i)| mk(l, i)).collect();
+        let required: Vec<usize> = (0..inputs.len()).collect();
+
+        // v84 is index 1; the slot-0 method of the target table is 0x4DE71E.
+        let cand = vtable_relocate(&inputs, &required, 1, 0x4DE71E, &SigOptions::default())
+            .expect("a (partial) vtable relocation");
+        eprintln!("chosen grade {} aob {}", cand.grade.letter(), cand.aob);
+        for r in &cand.reasons {
+            eprintln!("  reason: {r}");
+        }
+        for pv in &cand.per_version {
+            eprintln!(
+                "  {:>5}: {} aob={}",
+                pv.label,
+                pv.match_rva
+                    .map_or("unreached".to_string(), |r| format!("0x{r:X}")),
+                pv.aob.is_some()
+            );
+        }
+        let pinned = cand
+            .per_version
+            .iter()
+            .filter(|p| p.match_rva.is_some())
+            .count();
+        assert!(
+            pinned >= 3,
+            "expected at least v83/v84/v88 pinned, got {pinned}"
+        );
+
+        let ranges = collapse_aob_ranges(&inputs, &cand.per_version);
+        eprintln!("version coverage:");
+        for r in &ranges {
+            eprintln!(
+                "  {} .. {} ({} builds): {}",
+                r.first_label,
+                r.last_label,
+                r.labels.len(),
+                r.aob
+            );
+        }
+        assert!(!ranges.is_empty(), "at least one AOB range expected");
+        // Every minted range AOB must actually be a re-scannable byte pattern.
+        for r in &ranges {
+            assert!(
+                try_signature_from_aob(&r.aob).is_ok(),
+                "range AOB must be a real byte pattern: {}",
+                r.aob
+            );
+        }
     }
 
     #[test]
