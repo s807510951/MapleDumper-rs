@@ -484,6 +484,7 @@ const SIG_I18N = {
     "sig.scUniq": "Unique", "sig.scStab": "Stable", "sig.scEntropy": "Entropy", "sig.scSemantic": "Semantic",
     "sig.scResolver": "Resolver", "sig.scCross": "Cross-build", "sig.scFinal": "Final",
     "sig.refColumn": "reference", "sig.diagnostics": "Diagnostics", "sig.saved": "Added to pattern list",
+    "sig.aobRanges": "Version coverage", "sig.aobRangesHint": "Each AOB matches the listed builds at the function's address; a fresh one is minted automatically where the bytes break.",
     "sig.summary": "{arch} · {files} file(s) · {builds} unique build(s)", "sig.dupBuilds": "Duplicate builds",
     "sig.gradeLegend": "Grade legend",
     "sig.holdout": "Holdout validation", "sig.holdoutOk": "matched the held-out build",

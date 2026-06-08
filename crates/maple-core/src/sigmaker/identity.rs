@@ -295,6 +295,115 @@ pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
         .sum()
 }
 
+/// Every instruction-boundary RVA in an x86 image's executable regions, by linear disassembly. A
+/// recompiled target is not necessarily a `call` destination or a standard-prologue function entry
+/// (the real GMS v83/v84 target is a *mid-function* code site reached by neither), so the only
+/// enumeration that can relocate an arbitrary code window is the set of real instruction starts. On an
+/// invalid byte the sweep advances one byte and resyncs, so a data island in `.text` cannot derail it.
+fn instruction_boundaries(img: &ImageInput) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for region in &img.code_regions {
+        let bytes = read_region(img.source, region.base, region.size);
+        let mut decoder = Decoder::with_ip(
+            bitness(img.arch),
+            &bytes,
+            region.base as u64,
+            DecoderOptions::NONE,
+        );
+        let mut instr = Instruction::default();
+        while decoder.can_decode() {
+            let pos = decoder.position();
+            out.push((region.base - img.base) + pos);
+            decoder.decode_out(&mut instr);
+            if instr.is_invalid() || instr.len() == 0 {
+                let _ = decoder.set_position(pos + 1);
+            }
+        }
+    }
+    out
+}
+
+/// The best fingerprint match for `reference` among every instruction-boundary code window in an
+/// image. Returns the winning RVA, its similarity, the best similarity of any *other* window more than
+/// one instruction away (the runner-up, so the caller can require a uniqueness margin), and the
+/// winner's identity. Adjacent boundaries overlap heavily and would otherwise be their own near-equal
+/// runner-up, so the runner-up ignores windows within `MIN_DISTINCT_GAP` bytes of the winner. `None`
+/// only when the image has no decodable code. x86 only: the windowing matches `enclosing_function`.
+///
+/// This is a linear scan of every instruction start in `.text`, so it is the heavy path; it runs only
+/// as the last-resort fallback in generation, after byte and string anchors have both failed.
+#[must_use]
+pub fn best_fingerprint_match(
+    img: &ImageInput,
+    reference: &FnIdentity,
+) -> Option<(usize, f64, f64, FnIdentity)> {
+    if !matches!(img.arch, Arch::X86) {
+        return None;
+    }
+    // Two windows closer than this are the same match shifted by a byte or two, not distinct rivals.
+    const MIN_DISTINCT_GAP: usize = 16;
+    let mut best: Option<(usize, f64, FnIdentity)> = None;
+    let mut runner_up = 0.0f64;
+    for rva in instruction_boundaries(img) {
+        let id = fn_identity(img, rva);
+        let sim = reference.similarity(&id);
+        match best.take() {
+            // A new winner: the old winner becomes a rival only if it is far enough to be distinct.
+            Some((brva, bsim, _)) if sim > bsim => {
+                if brva.abs_diff(rva) >= MIN_DISTINCT_GAP {
+                    runner_up = runner_up.max(bsim);
+                }
+                best = Some((rva, sim, id));
+            }
+            // Not a winner: it raises the runner-up only if far enough from the current winner.
+            Some(prev) => {
+                if prev.0.abs_diff(rva) >= MIN_DISTINCT_GAP {
+                    runner_up = runner_up.max(sim);
+                }
+                best = Some(prev);
+            }
+            None => best = Some((rva, sim, id)),
+        }
+    }
+    best.map(|(rva, sim, id)| (rva, sim, runner_up, id))
+}
+
+/// The top `k` instruction-boundary windows by similarity to `reference`, at least `floor`, each more
+/// than one instruction apart (gap-deduped). For the last-resort shortlist: when nothing pinned the
+/// function uniquely, this surfaces the family of structural near-duplicates it belongs to so the
+/// caller can list them for manual disambiguation. x86 only; empty on a non-x86 image.
+#[must_use]
+pub(super) fn fingerprint_topk(
+    img: &ImageInput,
+    reference: &FnIdentity,
+    k: usize,
+    floor: f64,
+) -> Vec<(usize, f64)> {
+    if !matches!(img.arch, Arch::X86) {
+        return Vec::new();
+    }
+    const GAP: usize = 16;
+    let mut scored: Vec<(usize, f64)> = instruction_boundaries(img)
+        .into_iter()
+        .filter_map(|rva| {
+            let sim = reference.similarity(&fn_identity(img, rva));
+            (sim >= floor).then_some((rva, sim))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    let mut out: Vec<(usize, f64)> = Vec::new();
+    for (rva, sim) in scored {
+        if out.iter().any(|(r, _)| r.abs_diff(rva) < GAP) {
+            continue;
+        }
+        out.push((rva, sim));
+        if out.len() >= k {
+            break;
+        }
+    }
+    out
+}
+
 fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
     let ascii = text.as_bytes();
     let utf16: Vec<u8> = ascii.iter().flat_map(|&b| [b, 0]).collect();

@@ -147,6 +147,38 @@ the evidence (modules scanned, modules hit, total matches, and the maximum in an
 recorded in the reason text and exposed in the JSON `negative_summary`. Any match lowers the
 signature's uniqueness and final score, and can drop its grade.
 
+### Relocating across major versions
+
+When no single byte pattern survives every supplied build, the generator falls back through a layered
+stack of recompile-stable anchors, tried strongest first and stopping at the first that pins the
+function confidently:
+
+- **String anchor** — a read-only string the function references (build-invariant; 71-100% cross-version
+  survival, versus 0-2% for a byte pattern).
+- **Import anchor** — the distinctive set of imported APIs it calls.
+- **Caller anchor** — a string-anchored *caller*, with the target re-found as the caller's callee whose
+  identity matches, so a function with no handle of its own is reachable through one that has.
+- **Vtable anchor** — for a C++ virtual method, the class's vtable is matched across builds by a
+  distinctiveness-weighted, semi-global affine alignment of its per-slot fingerprints, so methods
+  inserted or removed across a major version shift the match instead of breaking it; the target's slot
+  is then read back, following any adjustor thunk. When a refactor drifts the table past the per-slot
+  matcher, the table is **grounded through the constructor that installs it** (the constructor pins
+  itself by a build-stable class string), recovering the vtable address directly.
+- **Encoding and mnemonic fingerprints** — structural fallbacks for template-instance siblings.
+- **Shortlist** — when nothing pins the function uniquely, a per-build list of the structural family it
+  belongs to, each with a minted AOB, instead of a confidently-wrong answer.
+
+A long version jump is crossed over the highest-confidence **chain** through intermediate builds rather
+than one low-confidence leap, with every hop verified against the original so the chain cannot drift
+method by method.
+
+Each reached build is handed a freshly minted, operand-masked byte AOB, and the report collapses these
+into **version-coverage ranges**: the contiguous runs of builds each AOB stays valid across, with a
+fresh AOB minted automatically where the bytes break. A relocated signature can report, for example,
+that one AOB works for v83 through v88 and a second takes over for v91 through v95. Coverage is partial
+by design: the function is pinned in every build a confident path reaches and reported unreached in the
+rest. Relocation is x86 / PE32.
+
 ## Desktop workspace
 
 Launch `maple-app.exe`. In the Workspace view:
