@@ -132,10 +132,14 @@ impl FileImage {
                 Arch::X86,
                 rd_u32(&data, opt + 0x1C).ok_or_else(|| bad("truncated PE32"))? as usize,
             ),
-            0x20B => (
-                Arch::X64,
-                rd_u64(&data, opt + 0x18).ok_or_else(|| bad("truncated PE32+"))? as usize,
-            ),
+            0x20B => {
+                let base = rd_u64(&data, opt + 0x18).ok_or_else(|| bad("truncated PE32+"))?;
+                // PE32+ carries a 64-bit image base; on a 32-bit build it cannot be represented, so
+                // refuse rather than truncating the high dword (WPE-3). Lossless on a 64-bit build.
+                let base = usize::try_from(base)
+                    .map_err(|_| bad("PE32+ image base exceeds this build's address width"))?;
+                (Arch::X64, base)
+            }
             _ => return Err(bad("unsupported optional header magic")),
         };
         let size_of_image =
@@ -530,7 +534,10 @@ mod tests {
         d
     }
 
+    // These fixtures build PE32+ (x64) images with a >4 GiB image base, which only fits in `usize`
+    // on a 64-bit build (and a 32-bit build now refuses PE32+, WPE-3), so they are 64-bit-only.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn parses_pe32plus_and_pe32() {
         let img = FileImage::parse(build_pe(false, None)).unwrap();
         assert_eq!(img.base(), 0x1_4000_0000);
@@ -540,6 +547,14 @@ mod tests {
         let img32 = FileImage::parse(build_pe(true, None)).unwrap();
         assert_eq!(img32.base(), 0x0040_0000);
         assert_eq!(img32.arch(), Arch::X86);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "32")]
+    fn rejects_pe32plus_image_base_on_a_32_bit_build() {
+        // WPE-3: a PE32+ image base is 64-bit and cannot be represented on a 32-bit build, so parse
+        // refuses it rather than truncating the high dword. build_pe(false) uses base 0x1_4000_0000.
+        assert!(FileImage::parse(build_pe(false, None)).is_err());
     }
 
     #[test]
@@ -564,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn import_range_rejects_overflowing_directory() {
         let opt = 0x40 + 4 + 20;
         let dir1 = opt + 0x70 + 8; // PE32+ data directory entry #1 (import)
@@ -574,6 +590,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn code_regions_at_virtual_addresses() {
         let img = FileImage::parse(build_pe(false, None)).unwrap();
         assert_eq!(
@@ -586,6 +603,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn read_into_section_bytes_and_bss_tail() {
         let img = FileImage::parse(build_pe(false, None)).unwrap();
         let mut buf = [0u8; 0x20];
@@ -597,6 +615,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn read_into_header_and_bounds() {
         let img = FileImage::parse(build_pe(false, None)).unwrap();
         let mut mz = [0u8; 2];
@@ -614,6 +633,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn build_stamp_and_code_hash_work_on_fileimage() {
         let img = FileImage::parse(build_pe(false, None)).unwrap();
         let stamp = crate::stamp::BuildStamp::capture(&img, img.base(), &img.regions());
@@ -624,6 +644,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn pack_report_flags_packer_name_and_clears_normal() {
         let img = FileImage::parse(build_pe(false, None)).unwrap();
         assert!(!img.pack_report().likely_packed);
@@ -649,6 +670,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn opens_synthetic_pe_from_disk() {
         let bytes = build_pe(false, None);
         let mut path = std::env::temp_dir();
@@ -691,6 +713,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn parses_and_queries_relocations() {
         // two HIGHLOW entries on page 0x1000 at offsets 4 and 8
         let img = FileImage::parse(build_pe(
@@ -707,6 +730,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn import_range_respects_num_rva_and_sizes() {
         let opt = 0x40 + 4 + 20;
         let dir1 = opt + 0x70 + 8; // PE32+ data directory entry #1 (import)
@@ -752,6 +776,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn read_into_clamps_when_raw_size_lies_past_eof() {
         // A hostile image can claim a SizeOfRawData far larger than the file. The reader must
         // back what the file actually holds and zero-fill the rest, never indexing past the buffer.
