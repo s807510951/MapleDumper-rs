@@ -19,12 +19,8 @@ pub(crate) fn read_window<S: MemorySource>(source: &S, addr: usize, n: usize) ->
     Some(buf[..read].iter().map(|b| format!("{b:02X}")).collect())
 }
 
-pub(crate) fn arch_of(s: &str) -> Arch {
-    if s.eq_ignore_ascii_case("x86") || s.contains("32") {
-        Arch::X86
-    } else {
-        Arch::X64
-    }
+pub(crate) fn arch_of(s: &str) -> Result<Arch, String> {
+    Arch::parse(s)
 }
 
 pub(crate) fn parse_addr(field: &Option<String>) -> Result<Option<usize>, String> {

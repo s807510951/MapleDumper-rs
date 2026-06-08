@@ -49,7 +49,7 @@ pub struct AsmScanReport {
 fn run_asm_scan(cancel: &AtomicBool, req: AsmScanRequest) -> Result<AsmScanReport, String> {
     use maple_core::{AttachOptions, Locator, Target};
 
-    let arch = arch_of(&req.arch);
+    let arch = arch_of(&req.arch)?;
     let patterns = maple_core::parse_asm_patterns(&req.lines)
         .ok_or_else(|| "enter at least one assembly line to scan for".to_string())?;
     let from = parse_addr(&req.from)?;

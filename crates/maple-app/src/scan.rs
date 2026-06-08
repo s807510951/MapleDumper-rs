@@ -111,7 +111,8 @@ fn pattern_set_hash(patterns: &[maple_core::pattern::Pattern]) -> String {
 
 #[tauri::command]
 pub fn parse_patterns_text(text: String, arch: String) -> Vec<PatternView> {
-    let a = arch_of(&arch);
+    // A display-only parse preview, not a scan, so an unparseable arch falls back rather than erroring.
+    let a = arch_of(&arch).unwrap_or(maple_core::Arch::X64);
     maple_core::pattern::parse_patterns(&text, a)
         .iter()
         .map(|p| {
@@ -150,7 +151,7 @@ fn run_scan(
 ) -> Result<ScanReport, String> {
     use maple_core::{AttachOptions, Locator, Target};
 
-    let arch = arch_of(&req.arch);
+    let arch = arch_of(&req.arch)?;
     let locator = if req.locator.eq_ignore_ascii_case("class") {
         Locator::Class(req.target.clone())
     } else {
