@@ -10,8 +10,8 @@ use maple_core::output::{export, offsets_header};
 use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file, parse_patterns_file_strict};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
-    ResolveTrace, ScanResult, Target, apply_string_anchors, assembly_scan, diff, lint,
-    parse_asm_patterns, parse_dump, parse_stamp, profile, scan_in,
+    ResolveTrace, ScanResult, Target, arch_mismatch, assembly_scan, diff, lint, parse_asm_patterns,
+    parse_dump, parse_stamp, profile,
 };
 use maple_core::{
     FileImage, HoldoutResult, ImageInput, NegativeEvidence, NegativeHit, SigCandidate, SigOptions,
@@ -683,7 +683,7 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
     if !json {
         println!("[+] scanning {} regions", regions.len());
     }
-    let mut result = scan_in(
+    let result = maple_core::scan_live(
         &target,
         target.module.base,
         target.module.size,
@@ -692,24 +692,6 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
         &patterns,
         arch,
     );
-
-    if patterns.iter().any(|p| p.string_anchor.is_some()) {
-        let img = ImageInput {
-            label: String::new(),
-            source: &target,
-            base: target.module.base,
-            size: target.module.size,
-            code_regions: code_regions.clone(),
-            regions: regions.clone(),
-            import: None,
-            arch,
-            code_hash: 0,
-            packed: false,
-            pack_reasons: Vec::new(),
-            reloc: None,
-        };
-        apply_string_anchors(&mut result, &img, &patterns);
-    }
 
     let mut stamp = BuildStamp::capture(&target, target.module.base, &code_regions);
     stamp.version = target.file_version();
@@ -1026,29 +1008,6 @@ fn arch_str(arch: Arch) -> &'static str {
         "x64"
     } else {
         "x86"
-    }
-}
-
-fn arch_bits(arch: Arch) -> &'static str {
-    if matches!(arch, Arch::X64) {
-        "64"
-    } else {
-        "32"
-    }
-}
-
-/// Compare the requested architecture against the module's actual one (when it can be read). Returns
-/// an actionable message on a definite mismatch, so a scan fails clearly instead of silently reading
-/// the wrong bitness and reporting everything "not found".
-fn arch_mismatch(requested: Arch, actual: Option<Arch>, module: &str) -> Option<String> {
-    match actual {
-        Some(a) if a != requested => Some(format!(
-            "architecture mismatch: requested {} but {module} is {}; pass --arch {}",
-            arch_str(requested),
-            arch_str(a),
-            arch_bits(a)
-        )),
-        _ => None,
     }
 }
 
@@ -1677,9 +1636,9 @@ mod tests {
 
     #[test]
     fn arch_mismatch_detects_definite_conflicts() {
-        // requested x64 but the module is x86: actionable message naming the right --arch
+        // requested x64 but the module is x86: actionable message naming the right bitness
         let msg = arch_mismatch(Arch::X64, Some(Arch::X86), "MapleStory.exe").unwrap();
-        assert!(msg.contains("--arch 32"), "{msg}");
+        assert!(msg.contains("32-bit"), "{msg}");
         assert!(msg.contains("x86"));
         // matching architectures: no complaint
         assert!(arch_mismatch(Arch::X64, Some(Arch::X64), "m").is_none());

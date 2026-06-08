@@ -27,6 +27,40 @@ impl Arch {
             other => Err(format!("invalid arch '{other}' (use 32 or 64)")),
         }
     }
+
+    /// The short name (`"x86"` / `"x64"`).
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Arch::X86 => "x86",
+            Arch::X64 => "x64",
+        }
+    }
+
+    /// The address width in bits (32 / 64).
+    #[must_use]
+    pub fn bits(self) -> u32 {
+        match self {
+            Arch::X86 => 32,
+            Arch::X64 => 64,
+        }
+    }
+}
+
+/// A message describing a requested-vs-actual architecture mismatch, or `None` when they agree or
+/// the module's architecture is unknown. Shared by the CLI and the desktop app so the diagnostic
+/// cannot drift between front-ends.
+#[must_use]
+pub fn arch_mismatch(requested: Arch, actual: Option<Arch>, module: &str) -> Option<String> {
+    match actual {
+        Some(a) if a != requested => Some(format!(
+            "architecture mismatch: requested {} but {module} is {}; rescan with the {}-bit architecture",
+            requested.label(),
+            a.label(),
+            a.bits()
+        )),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

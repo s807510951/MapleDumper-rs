@@ -774,6 +774,51 @@ pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns:
     }
 }
 
+/// Scan a live target end to end: run the chunked scan over its regions, then apply any string
+/// anchors. The CLI and the desktop app both call this, so the live-scan sequence (the scan plus the
+/// degenerate `ImageInput` that string-anchor resolution needs) has a single definition and the two
+/// front-ends cannot drift on it.
+pub fn scan_live<S>(
+    source: &S,
+    module_base: usize,
+    module_size: usize,
+    regions: &[Region],
+    code_regions: &[Region],
+    patterns: &[Pattern],
+    arch: Arch,
+) -> ScanResult
+where
+    S: MemorySource + Sync,
+{
+    let mut result = scan_in(
+        source,
+        module_base,
+        module_size,
+        regions,
+        code_regions,
+        patterns,
+        arch,
+    );
+    if patterns.iter().any(|p| p.string_anchor.is_some()) {
+        let img = ImageInput {
+            label: String::new(),
+            source,
+            base: module_base,
+            size: module_size,
+            code_regions: code_regions.to_vec(),
+            regions: regions.to_vec(),
+            import: None,
+            arch,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        apply_string_anchors(&mut result, &img, patterns);
+    }
+    result
+}
+
 #[derive(Clone, Copy)]
 struct Probe {
     buf: usize,
@@ -1104,6 +1149,74 @@ mod tests {
         let stat = result.findings.iter().find(|f| f.name == "Stat").unwrap();
         assert_eq!(stat.value, 0x101);
         assert!(!stat.is_offset);
+    }
+
+    #[test]
+    fn scan_live_matches_scan_in_plus_apply_string_anchors() {
+        // ARCH-1 / TEST-4: scan_live is the single live-scan path both front-ends call. It must equal
+        // a manual scan_in + apply_string_anchors over the same input (covering both a byte pattern
+        // and a string anchor), so the CLI and the app cannot drift on the scan sequence.
+        let base = 0x1000usize;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        mem[0x100] = 0x68;
+        mem[0x101..0x105].copy_from_slice(&0x1010u32.to_le_bytes());
+        mem[0x150..0x154].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let source = BufferSource::new(base, mem);
+        let regions = vec![
+            Region { base, size: 0x100 },
+            Region {
+                base: base + 0x100,
+                size: 0x100,
+            },
+        ];
+        let code_regions = vec![Region {
+            base: base + 0x100,
+            size: 0x100,
+        }];
+        let patterns = parse_patterns("Stat = @string=MapleStory\nMark = DE AD BE EF", Arch::X86);
+
+        let mut reference = scan_in(
+            &source,
+            base,
+            0x200,
+            &regions,
+            &code_regions,
+            &patterns,
+            Arch::X86,
+        );
+        let img = ImageInput {
+            label: String::new(),
+            source: &source,
+            base,
+            size: 0x200,
+            code_regions: code_regions.clone(),
+            regions: regions.clone(),
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        apply_string_anchors(&mut reference, &img, &patterns);
+
+        let live = scan_live(
+            &source,
+            base,
+            0x200,
+            &regions,
+            &code_regions,
+            &patterns,
+            Arch::X86,
+        );
+
+        assert_eq!(live.found, reference.found);
+        assert_eq!(live.not_found, reference.not_found);
+        assert_eq!(live.findings, reference.findings);
+        assert_eq!(live.rows.len(), reference.rows.len());
+        assert!(live.found.contains(&"Stat".to_string()));
+        assert!(live.findings.iter().any(|f| f.name == "Mark"));
     }
 
     #[test]

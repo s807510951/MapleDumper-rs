@@ -32,13 +32,13 @@ pub use domain::{
     SectionKind, checked_rva,
 };
 pub use engine::{
-    PatternRow, ProfileReport, ScanResult, apply_string_anchors, profile, scan, scan_in,
+    PatternRow, ProfileReport, ScanResult, apply_string_anchors, profile, scan, scan_in, scan_live,
 };
 pub use fileimage::{FileImage, PackReport, RelocKind};
 pub use health::{Lint, lint};
 pub use memory::{MemorySource, Region};
 pub use output::Finding;
-pub use pattern::{Arch, Pattern, Signature};
+pub use pattern::{Arch, Pattern, Signature, arch_mismatch};
 pub use pattern::{signature_from_aob, try_signature_from_aob};
 pub use resolver::{Kind, ResolveDetail, ResolveFail, ResolveOp, resolve_op};
 pub use scanner::{CompiledPattern, find_all};
