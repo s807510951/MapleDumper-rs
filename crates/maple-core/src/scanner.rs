@@ -332,6 +332,30 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn forced_avx2_path_matches_reference_when_available() {
+        // Call the AVX2 implementation directly (when the host supports it) so the SIMD path is
+        // provably exercised, not silently replaced by the scalar fallback on a non-AVX2 runner
+        // (the differential test above goes through find_all, which auto-selects). TEST-3.
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let mut rng = XorShift(0x0BAD_F00D_1234_5678);
+        for _ in 0..2000 {
+            let n = (rng.next_u64() % 400) as usize + 1;
+            let haystack: Vec<u8> = (0..n).map(|_| (rng.next_u64() & 0x7) as u8).collect();
+            let plen = (rng.next_u64() % 8) as usize + 1;
+            let bytes: Vec<u8> = (0..plen).map(|_| (rng.next_u64() & 0x7) as u8).collect();
+            let mut mask: Vec<bool> = (0..plen).map(|_| rng.next_u64() & 1 == 0).collect();
+            mask[0] = true;
+            let s = sig(&bytes, &mask);
+            let cp = CompiledPattern::new(&s).unwrap();
+            let avx2 = unsafe { find_all_avx2(&haystack, &cp) };
+            assert_eq!(avx2, reference(&haystack, &s), "n={n}");
+        }
+    }
+
+    #[test]
     fn scalar_matches_reference_on_random_inputs() {
         let mut rng = XorShift(0xDEAD_BEEF_CAFE_F00D);
         for _ in 0..2000 {

@@ -1,0 +1,57 @@
+# cargo-deny policy (run: cargo deny check). Gates dependency advisories, licenses, source
+# registries, and duplicate-version bans. CI runs this in place of a bare `cargo audit` so advisory
+# WARNINGS (unmaintained/yanked), not just hard vulnerabilities, are surfaced and gated.
+
+[advisories]
+version = 2
+yanked = "deny"
+# These unmaintained advisories only reach the Linux GTK3 / webkit GUI path that Tauri pulls in
+# transitively. MapleDumper is Windows-only, so those crates are never built or shipped for the
+# target; they are ignored here (with their IDs documented) so the gate stays meaningful for new
+# advisories instead of being permanently red. Revisit when Tauri moves off the GTK3 stack.
+ignore = [
+    "RUSTSEC-2024-0411", # gdkwayland-sys (gtk-rs GTK3 bindings, unmaintained)
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkx11-sys
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0417", # gdkx11
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+    "RUSTSEC-2024-0370", # proc-macro-error (unmaintained, transitive build-time)
+    # rust-unic family (unmaintained), pulled transitively through urlpattern -> tauri-utils.
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "BSL-1.0",
+]
+
+[bans]
+# Duplicate transitive versions are mostly inherited from Tauri; surface them without failing CI.
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
