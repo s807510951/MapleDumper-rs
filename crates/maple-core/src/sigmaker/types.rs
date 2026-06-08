@@ -255,6 +255,11 @@ pub struct SigCandidate {
     pub wildcards: usize,
     pub fixed_ratio: f64,
     pub reloc_safe: bool,
+    /// Whether a hard gate forced grade F, and whether the input was packed (which caps the grade at
+    /// D). Carried as typed flags so a later re-grade (negative corpus) re-applies the caps without
+    /// re-deriving them from the grade or by substring-matching `reasons`.
+    pub gated: bool,
+    pub packed: bool,
     /// The independent sub-scores the grade was derived from.
     pub scores: SubScores,
     /// Human-readable explanations of why the candidate scored high or low.

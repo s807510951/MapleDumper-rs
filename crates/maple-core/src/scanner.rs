@@ -3,7 +3,9 @@ use crate::pattern::Signature;
 pub struct CompiledPattern {
     bytes: Vec<u8>,
     mask: Vec<bool>,
-    anchor: Option<(usize, u8)>,
+    // A compiled pattern always has at least one fixed byte (an all-wildcard signature makes `new`
+    // return `None`), so the anchor is non-optional and the scan paths never branch on its absence.
+    anchor: (usize, u8),
     secondary: Option<(usize, u8)>,
 }
 
@@ -28,7 +30,7 @@ impl CompiledPattern {
         Some(Self {
             bytes: signature.bytes.clone(),
             mask: signature.mask.clone(),
-            anchor: Some(anchor),
+            anchor,
             secondary,
         })
     }
@@ -81,10 +83,6 @@ pub fn find_all(haystack: &[u8], pat: &CompiledPattern) -> Vec<usize> {
     if len == 0 || n < len {
         return Vec::new();
     }
-    let last_start = n - len;
-    if pat.anchor.is_none() {
-        return (0..=last_start).collect();
-    }
     #[cfg(target_arch = "x86_64")]
     {
         if std::is_x86_feature_detected!("avx2") {
@@ -95,7 +93,7 @@ pub fn find_all(haystack: &[u8], pat: &CompiledPattern) -> Vec<usize> {
 }
 
 fn find_all_scalar(haystack: &[u8], pat: &CompiledPattern) -> Vec<usize> {
-    let (anchor_pos, anchor_byte) = pat.anchor.expect("anchor required");
+    let (anchor_pos, anchor_byte) = pat.anchor;
     let len = pat.bytes.len();
     let n = haystack.len();
     let mut out = Vec::new();
@@ -119,7 +117,7 @@ unsafe fn find_all_avx2(haystack: &[u8], pat: &CompiledPattern) -> Vec<usize> {
     use core::arch::x86_64::{
         __m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_set1_epi8,
     };
-    let (anchor_pos, anchor_byte) = pat.anchor.expect("anchor required");
+    let (anchor_pos, anchor_byte) = pat.anchor;
     let len = pat.bytes.len();
     let n = haystack.len();
     let mut out = Vec::new();
@@ -187,14 +185,13 @@ impl<'a> ScannerIndex<'a> {
     pub fn build(patterns: impl Iterator<Item = (usize, &'a CompiledPattern)>) -> Self {
         let mut by_anchor: Vec<Vec<Anchored<'a>>> = (0..256).map(|_| Vec::new()).collect();
         for (idx, pat) in patterns {
-            if let Some((anchor_pos, anchor_byte)) = pat.anchor {
-                by_anchor[anchor_byte as usize].push(Anchored {
-                    idx,
-                    anchor_pos,
-                    secondary: pat.secondary,
-                    pat,
-                });
-            }
+            let (anchor_pos, anchor_byte) = pat.anchor;
+            by_anchor[anchor_byte as usize].push(Anchored {
+                idx,
+                anchor_pos,
+                secondary: pat.secondary,
+                pat,
+            });
         }
         Self { by_anchor }
     }
@@ -388,7 +385,7 @@ mod tests {
     fn secondary_anchor_is_a_distinct_fixed_byte() {
         let s = sig(&[0x48, 0x8B, 0x0D, 0x00], &[true, true, true, false]);
         let cp = CompiledPattern::new(&s).unwrap();
-        let (ap, _) = cp.anchor.unwrap();
+        let (ap, _) = cp.anchor;
         let (sp, sb) = cp.secondary_anchor().expect("a second fixed byte exists");
         assert_ne!(
             sp, ap,

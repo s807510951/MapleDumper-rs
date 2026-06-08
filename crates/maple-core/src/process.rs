@@ -287,6 +287,17 @@ fn is_readable(protect: u32) -> bool {
     protect & READABLE != 0
 }
 
+/// Map a PE COFF `Machine` value to the instruction set this tool can decode. ARM (and any other
+/// machine) returns `None` so the caller refuses rather than mis-decoding the bytes as x86/x64,
+/// since address width and instruction set are not the same thing.
+fn arch_from_machine(machine: u16) -> Option<Arch> {
+    match machine {
+        0x8664 => Some(Arch::X64), // amd64
+        0x014C => Some(Arch::X86), // i386
+        _ => None,
+    }
+}
+
 fn is_executable(protect: u32) -> bool {
     const EXECUTABLE: u32 =
         PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
@@ -295,7 +306,7 @@ fn is_executable(protect: u32) -> bool {
 
 fn enumerate_regions(handle: HANDLE, module: ModuleInfo, executable_only: bool) -> Vec<Region> {
     let start = module.base;
-    let end = module.base + module.size;
+    let end = module.base.saturating_add(module.size);
     let mut regions = Vec::new();
     let mut addr = start;
     while addr < end {
@@ -316,7 +327,7 @@ fn enumerate_regions(handle: HANDLE, module: ModuleInfo, executable_only: bool) 
         if region_size == 0 {
             break;
         }
-        let region_end = region_base + region_size;
+        let region_end = region_base.saturating_add(region_size);
         let usable = is_readable(mbi.Protect) && (!executable_only || is_executable(mbi.Protect));
         if mbi.State == MEM_COMMIT && usable {
             let clip_start = region_base.max(start);
@@ -517,11 +528,7 @@ impl Target {
     /// when the header is unreadable or the machine is one this tool does not model.
     #[must_use]
     pub fn module_arch(&self) -> Option<Arch> {
-        match crate::stamp::pe_machine(self, self.module.base)? {
-            0x8664 | 0xAA64 => Some(Arch::X64), // amd64, arm64
-            0x014C | 0x01C4 => Some(Arch::X86), // i386, armnt (32-bit)
-            _ => None,
-        }
+        arch_from_machine(crate::stamp::pe_machine(self, self.module.base)?)
     }
 
     /// The image's on-disk file version (VS_FIXEDFILEINFO), best-effort. Note this reads the
@@ -612,6 +619,17 @@ impl MemorySource for Target {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arch_from_machine_rejects_arm_and_unknown_machines() {
+        assert_eq!(arch_from_machine(0x8664), Some(Arch::X64), "amd64");
+        assert_eq!(arch_from_machine(0x014C), Some(Arch::X86), "i386");
+        // ARM machines share the address-width buckets but are a different instruction set; they
+        // must be rejected, not mapped onto x64/x86 (WPE-1), or the decoder would read garbage.
+        assert_eq!(arch_from_machine(0xAA64), None, "arm64");
+        assert_eq!(arch_from_machine(0x01C4), None, "armnt");
+        assert_eq!(arch_from_machine(0x0000), None, "unknown");
+    }
 
     #[test]
     fn name_matching_is_tolerant() {

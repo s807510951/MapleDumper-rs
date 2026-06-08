@@ -589,9 +589,9 @@ pub fn apply_negative_corpus(cand: &mut super::types::SigCandidate, neg: Negativ
     cand.scores.uniqueness = cand.scores.uniqueness.saturating_sub(penalty);
     cand.scores.final_score = weighted_final(&cand.scores);
     cand.score = cand.scores.final_score;
-    let gated = cand.grade == Grade::F;
-    let packed = cand.reasons.iter().any(|r| r.contains("packed"));
-    cand.grade = grade_from(cand.scores.final_score, gated, packed);
+    // Re-apply the original hard-gate / packed caps from the typed flags, not by re-reading the grade
+    // or substring-matching the human-readable reasons (which would silently break if reworded).
+    cand.grade = grade_from(cand.scores.final_score, cand.gated, cand.packed);
     // Matching any unrelated module means the pattern is not a unique identity, so it cannot grade A
     // however strong the bytes are; more distinct modules cap it harder.
     let neg_cap = if neg.modules_hit >= 2 {
@@ -919,6 +919,8 @@ mod tests {
             wildcards: 0,
             fixed_ratio: 1.0,
             reloc_safe: true,
+            gated: false,
+            packed: false,
             scores: SubScores {
                 uniqueness: 100,
                 stability: 80,
@@ -932,6 +934,34 @@ mod tests {
             per_version: Vec::new(),
             diags: Vec::new(),
         }
+    }
+
+    #[test]
+    fn negative_corpus_represerves_the_packed_cap_from_the_typed_flag() {
+        // PSE-7: a packed candidate keeps its D cap after a negative-corpus re-grade even though its
+        // `reasons` never contain the word "packed" (the cap is read from the typed flag, not text).
+        let mut cand = graded_candidate();
+        cand.packed = true;
+        cand.grade = grade_from(cand.scores.final_score, false, true);
+        assert_eq!(
+            cand.grade,
+            Grade::D,
+            "packed input caps at D before the corpus"
+        );
+        apply_negative_corpus(
+            &mut cand,
+            NegativeEvidence {
+                modules_scanned: 5,
+                modules_hit: 1,
+                total_hits: 1,
+                max_hits_per_module: 1,
+            },
+        );
+        assert_eq!(
+            cand.grade,
+            Grade::D,
+            "the packed D cap must survive the re-grade via the typed flag, not a reason substring"
+        );
     }
 
     fn fingerprint_evidence() -> FingerprintEvidence {

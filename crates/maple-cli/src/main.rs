@@ -1783,6 +1783,8 @@ mod tests {
             wildcards: 4,
             fixed_ratio: 0.42,
             reloc_safe: true,
+            gated: false,
+            packed: false,
             per_version: vec![PerVersion {
                 label: "a.exe".to_string(),
                 match_rva: Some(0x20),
