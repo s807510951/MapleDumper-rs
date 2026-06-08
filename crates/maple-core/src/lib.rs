@@ -1,3 +1,10 @@
+//! MapleDumper engine.
+//!
+//! The modules below are public and the flat re-exports at the bottom of this file are the engine's
+//! intended API, consumed by the `maple-cli` and `maple-app` front-ends in this workspace. The
+//! surface is deliberately wide for those first-party consumers rather than a minimal external SDK;
+//! treat additions as semver-relevant for the workspace, not for outside crates.
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod asmscan;

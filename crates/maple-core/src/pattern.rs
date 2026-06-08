@@ -13,6 +13,13 @@ impl Arch {
     /// Parse an architecture name from the common spellings, rejecting anything else with a clear
     /// message. The single validating parser shared by the CLI and the desktop app, so a typo is an
     /// error rather than a silent default to one bitness.
+    ///
+    /// ```
+    /// use maple_core::Arch;
+    /// assert_eq!(Arch::parse("x64"), Ok(Arch::X64));
+    /// assert_eq!(Arch::parse(" 32 "), Ok(Arch::X86));
+    /// assert!(Arch::parse("sparc").is_err());
+    /// ```
     pub fn parse(s: &str) -> Result<Self, String> {
         match s.trim().to_ascii_lowercase().as_str() {
             "64" | "x64" | "amd64" | "x86_64" | "x86-64" => Ok(Arch::X64),
@@ -271,6 +278,16 @@ fn partition_anchor_directives(
     (build_string_anchor(&anchor), resolve)
 }
 
+/// Parse pattern-file text (one `name = AOB` per line, with optional `@key=value` directives) into
+/// patterns, best-effort: unparseable lines are skipped. Use [`parse_patterns_strict`] at a user
+/// trust boundary to get line-numbered errors instead.
+///
+/// ```
+/// use maple_core::{pattern::parse_patterns, Arch};
+/// let pats = parse_patterns("Player = 48 8B 0D ?? ?? ?? ??\n# a comment\n", Arch::X64);
+/// assert_eq!(pats.len(), 1);
+/// assert_eq!(pats[0].name, "Player");
+/// ```
 #[must_use]
 pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
