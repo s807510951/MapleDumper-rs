@@ -16,3 +16,7 @@ docs/
 # Local-only scratch prompts and notes (kept off the remote)
 /mapledumper_*_prompt.md
 /*.scratch.md
+
+# Local-only audit artifacts (kept off the remote)
+/audit-output.zip
+/audit-output/
