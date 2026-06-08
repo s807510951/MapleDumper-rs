@@ -66,7 +66,7 @@ fn meta_label(meta: &history::ScanRow) -> String {
 pub fn history_builds(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<history::BuildGroup>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     history::group_by_build(&conn).map_err(|e| e.to_string())
 }
 
@@ -76,7 +76,7 @@ pub fn history_page(
     limit: i64,
     offset: i64,
 ) -> Result<HistoryPage, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     let total = history::count_scans(&conn).map_err(|e| e.to_string())?;
     let scans = history::list_scans_page(&conn, limit.clamp(1, 500), offset.max(0))
         .map_err(|e| e.to_string())?;
@@ -88,13 +88,13 @@ pub fn history_findings(
     state: tauri::State<'_, AppState>,
     id: i64,
 ) -> Result<Vec<history::FindingRow>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     history::findings(&conn, id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn history_diff(state: tauri::State<'_, AppState>, a: i64, b: i64) -> Result<DiffView, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     let old_rows = history::findings(&conn, a).map_err(|e| e.to_string())?;
     let new_rows = history::findings(&conn, b).map_err(|e| e.to_string())?;
     let old_meta = history::scan_row(&conn, a).map_err(|e| e.to_string())?;
@@ -120,13 +120,13 @@ pub fn history_diff(state: tauri::State<'_, AppState>, a: i64, b: i64) -> Result
 
 #[tauri::command]
 pub fn history_delete(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     history::delete_scan(&conn, id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn history_clear(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     history::clear(&conn).map_err(|e| e.to_string())
 }
 
@@ -136,7 +136,7 @@ pub fn history_export(
     id: i64,
     format: String,
 ) -> Result<String, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     let meta = history::scan_row(&conn, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "scan not found".to_string())?;
@@ -160,7 +160,7 @@ pub fn history_matrix(
     state: tauri::State<'_, AppState>,
     ids: Vec<i64>,
 ) -> Result<MatrixView, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = crate::state::lock_db(&state.db);
     let mut columns = Vec::new();
     let mut per_scan: Vec<HashMap<String, Option<String>>> = Vec::new();
     let mut categories: BTreeMap<String, String> = BTreeMap::new();

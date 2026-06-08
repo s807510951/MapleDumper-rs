@@ -925,16 +925,11 @@ fn print_profile(r: &ProfileReport) {
     println!();
     println!("scan-only on a local buffer (no reads):");
     println!(
-        "  serial  (1 thread)   : {:>6} ms  ({:.2} GB/s)",
+        "  serial  (1 thread)   : {:>6} ms  ({:.2} GB/s)  [single-thread baseline; the real",
         r.scan_serial_ms,
         gbps(r.bytes, r.scan_serial_ms)
     );
-    println!(
-        "  parallel ({:>2} cores)  : {:>6} ms  ({:.2} GB/s)",
-        r.cores,
-        r.scan_parallel_ms,
-        gbps(r.bytes, r.scan_parallel_ms)
-    );
+    println!("                          parallel scan is measured in the full pipeline below]");
     println!("  matches: {}", r.matches);
     println!();
     println!(
@@ -955,8 +950,8 @@ fn print_profile(r: &ProfileReport) {
     println!();
     let read1 = r.read_ms.first().map_or(0, |&(_, ms)| ms);
     println!(
-        "verdict: read(1) {read1} ms | scan(parallel) {} ms | resolve {} ms | full {} ms",
-        r.scan_parallel_ms, r.resolve_ms, r.full_ms
+        "verdict: read(1) {read1} ms | scan(serial) {} ms | resolve {} ms | full {} ms",
+        r.scan_serial_ms, r.resolve_ms, r.full_ms
     );
     if r.full_ms > 0 && read1 as f64 >= 0.80 * r.full_ms as f64 {
         println!(
