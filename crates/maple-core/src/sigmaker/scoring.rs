@@ -613,6 +613,19 @@ pub fn apply_negative_corpus(cand: &mut super::types::SigCandidate, neg: Negativ
     ));
 }
 
+/// Build the negative-corpus evidence from per-module hit counts, fold it into `chosen`, and return
+/// it. The single entry point so a front-end computes the evidence once (to adjust the grade) and
+/// reuses the returned value for its summary, instead of building it twice.
+pub fn apply_negatives(
+    chosen: &mut super::types::SigCandidate,
+    modules_scanned: usize,
+    hit_counts: &[usize],
+) -> NegativeEvidence {
+    let evidence = NegativeEvidence::from_hits(modules_scanned, hit_counts);
+    apply_negative_corpus(chosen, evidence);
+    evidence
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

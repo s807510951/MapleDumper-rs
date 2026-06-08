@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use maple_core::{
     Arch, FileImage, ImageInput, NegativeEvidence, SigCandidate, SigOptions, SigReport, SigStage,
-    TargetKind, TargetSpec, apply_negative_corpus, generate_cross_with_progress,
-    generate_with_progress, make_string_anchor, negative_corpus_hits, try_signature_from_aob,
+    TargetKind, TargetSpec, apply_negatives, generate_cross_with_progress, generate_with_progress,
+    make_string_anchor, negative_corpus_hits, try_signature_from_aob,
 };
 use tauri::Emitter;
 
@@ -291,22 +291,20 @@ fn enrich_report(
         _ => Vec::new(),
     };
     let mut adjusted = r.clone();
-    if !hits.is_empty()
-        && let Some(chosen) = adjusted.chosen.as_mut()
-    {
+    // Score the negative corpus into the chosen candidate once and reuse the evidence for the view,
+    // rather than building NegativeEvidence a second time for the summary (ARCH-8).
+    let summary = (!negatives.is_empty()).then(|| {
         let counts: Vec<usize> = hits.iter().map(|h| h.count).collect();
-        apply_negative_corpus(
-            chosen,
-            NegativeEvidence::from_hits(negatives.len(), &counts),
-        );
-    }
+        match adjusted.chosen.as_mut() {
+            Some(chosen) => apply_negatives(chosen, negatives.len(), &counts),
+            None => NegativeEvidence::from_hits(negatives.len(), &counts),
+        }
+    });
 
     let mut view = sig_report_view(&adjusted);
     view.holdout = holdout_views(inputs, spec, opts);
     view.string_anchor = string_anchor_line(&adjusted, inputs);
-    if !negatives.is_empty() {
-        let counts: Vec<usize> = hits.iter().map(|h| h.count).collect();
-        let summary = NegativeEvidence::from_hits(negatives.len(), &counts);
+    if let Some(summary) = summary {
         view.negative_hits = hits
             .into_iter()
             .map(|h| NegHitView {
