@@ -30,8 +30,10 @@ use std::collections::{HashMap, HashSet};
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, Mnemonic, OpKind};
 
+use super::identity::{enclosing_function, make_string_anchor, resolve_string_anchor};
 use super::types::ImageInput;
 use super::{bitness, read_at, read_region};
+use crate::domain::StringAnchor;
 use crate::pattern::Arch;
 
 // A vtable shorter than this carries too little structure to identify uniquely (a handful of common
@@ -59,6 +61,11 @@ pub(super) struct VtableAnchor {
     /// class-specific override weighs ~1, a method inherited into many classes weighs little, so the
     /// shared base backbone cannot let a sibling class masquerade as the target's own table.
     pub weights: Vec<f64>,
+    /// A string anchor for a constructor that installs this vtable, when one exists. It grounds the
+    /// table across a major refactor the per-slot matcher cannot bridge: resolve the constructor by its
+    /// build-stable string, read the vtable address it writes, and the table is found without matching
+    /// its drifted internal structure.
+    pub installer: Option<StringAnchor>,
 }
 
 fn in_code(img: &ImageInput, abs: usize) -> bool {
@@ -331,6 +338,120 @@ fn follow_thunk(img: &ImageInput, slot_rva: usize) -> (usize, bool) {
     (slot_rva, false)
 }
 
+/// The code-pointer run starting exactly at `vt_rva`, or `None` if there is no run of at least
+/// [`MIN_RUN`] pointers there. Used to read a vtable at an address recovered from its constructor.
+fn vtable_at(img: &ImageInput, buf: &[u8], vt_rva: usize) -> Option<Vec<usize>> {
+    let mut slots = Vec::new();
+    let mut i = vt_rva;
+    while i + 4 <= buf.len() {
+        let v = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+        if !in_code(img, v) {
+            break;
+        }
+        slots.push(v - img.base);
+        i += 4;
+    }
+    (slots.len() >= MIN_RUN).then_some(slots)
+}
+
+// Bytes scanned on each side of a string-anchored function for the vtable address it installs: a
+// constructor's `mov [obj], offset vtable` sits within this of its string load, even when a prologue
+// split puts them in adjacent enclosing-function pieces.
+const INSTALL_WINDOW: usize = 2048;
+
+/// Whether the vtable address `vt_abs` appears as a 4-byte value within [`INSTALL_WINDOW`] of `f`.
+fn window_has_vtable(buf: &[u8], f: usize, vt_abs: u32) -> bool {
+    let lo = f.saturating_sub(INSTALL_WINDOW);
+    let hi = (f + INSTALL_WINDOW).min(buf.len().saturating_sub(4));
+    (lo..=hi).any(|i| u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) == vt_abs)
+}
+
+/// Find a string-anchorable function next to a site that installs the vtable at `vt_abs`. The function
+/// that loads the class string and the instruction that writes the vtable can land in adjacent
+/// prologue-split pieces, so the test is not "the install site IS the string function" but "the string
+/// function's window contains the install", which the resolve step mirrors. Returns that string anchor.
+fn find_installer(img: &ImageInput, buf: &[u8], vt_abs: u32) -> Option<StringAnchor> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut i = 0usize;
+    while i + 4 <= buf.len() {
+        if u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) == vt_abs
+            && in_code(img, img.base + i)
+        {
+            let ctor = enclosing_function(img, i);
+            if seen.insert(ctor)
+                && let Some(sa) = make_string_anchor(img, ctor)
+                && let Some(f) = resolve_string_anchor(img, &sa)
+                && window_has_vtable(buf, f, vt_abs)
+            {
+                return Some(sa);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The vtable a string-anchored function installs: scan within [`INSTALL_WINDOW`] of `anchor_fn` for a
+/// 4-byte value that starts a code-pointer run, returning the run whose fingerprint best matches `ref_fp`
+/// (when several vtables sit nearby, the target's own wins).
+fn installed_vtable(
+    img: &ImageInput,
+    buf: &[u8],
+    anchor_fn: usize,
+    ref_fp: &[Vec<u16>],
+    weights: &[f64],
+    slot_idx: usize,
+) -> Option<(Vec<usize>, usize)> {
+    let lo = anchor_fn.saturating_sub(INSTALL_WINDOW);
+    let hi = (anchor_fn + INSTALL_WINDOW).min(buf.len().saturating_sub(4));
+    let mut best: Option<(Vec<usize>, usize, f64)> = None;
+    let mut seen = std::collections::BTreeSet::new();
+    for i in lo..=hi {
+        let v = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+        let Some(rva) = v.checked_sub(img.base) else {
+            continue;
+        };
+        let Some(slots) = vtable_at(img, buf, rva) else {
+            continue;
+        };
+        if !seen.insert(rva) {
+            continue;
+        }
+        let cand_fp: Vec<Vec<u16>> = slots
+            .iter()
+            .map(|&sv| sorted(&slot_mnemonics(img, sv, SLOT_WINDOW)))
+            .collect();
+        let mapping = align(ref_fp, &cand_fp);
+        // The target's own slot must relocate into this table, not merely some slots match overall: a
+        // neighbour table can share the backbone yet lack the target method.
+        let Some(cs) = mapping.get(slot_idx).copied().flatten() else {
+            continue;
+        };
+        let d = dice_sorted(&ref_fp[slot_idx], &cand_fp[cs]);
+        if d < 0.15 {
+            continue;
+        }
+        let score = d + weighted_agreement(ref_fp, &cand_fp, &mapping, weights);
+        if best.as_ref().is_none_or(|(_, _, s)| score > *s) {
+            best = Some((slots, cs, score));
+        }
+    }
+    best.map(|(slots, cs, _)| (slots, cs))
+}
+
+/// Relocate the target through its constructor: resolve the installer's string to the constructor here,
+/// read the vtable address it writes, then align and read the target slot. This grounds the table by a
+/// build-stable string and so survives a major refactor the per-slot structural matcher declines on.
+fn resolve_via_installer(img: &ImageInput, anchor: &VtableAnchor) -> Option<usize> {
+    let inst = anchor.installer.as_ref()?;
+    let f = resolve_string_anchor(img, inst)?;
+    let buf = whole_image(img);
+    let ref_fp: Vec<Vec<u16>> = anchor.fingerprint.iter().map(|v| sorted(v)).collect();
+    let (slots, cand_slot) = installed_vtable(img, &buf, f, &ref_fp, &anchor.weights, anchor.slot)?;
+    let (real, _) = follow_thunk(img, slots[cand_slot]);
+    Some(real)
+}
+
 /// Build a vtable anchor for the method whose entry is `target_entry`: find the vtable that dispatches it
 /// (directly or through a thunk) and capture that table's per-slot fingerprint and the target's slot.
 /// Among several tables that contain the method, the largest is chosen (most structure to match on),
@@ -351,29 +472,40 @@ pub(super) fn make_vtable_anchor(img: &ImageInput, target_entry: usize) -> Optio
             *table_count.entry(rva).or_default() += 1;
         }
     }
-    // (slot count, slot index, via_thunk, slots) of the best table seen so far.
-    let mut chosen: Option<(usize, usize, bool, Vec<usize>)> = None;
-    for (_start, slots) in &vts {
+    // Every table that dispatches the method (>= MIN_SLOTS): (slot count, start RVA, slot index, via).
+    let mut candidates: Vec<(usize, usize, usize, bool)> = Vec::new();
+    for (start, slots) in &vts {
         if slots.len() < MIN_SLOTS {
             continue;
         }
         for (i, &sv) in slots.iter().enumerate() {
             let (real, via) = follow_thunk(img, sv);
             if real == target_entry {
-                let better = match &chosen {
-                    None => true,
-                    Some((n, _, prev_via, _)) => {
-                        slots.len() > *n || (slots.len() == *n && *prev_via && !via)
-                    }
-                };
-                if better {
-                    chosen = Some((slots.len(), i, via, slots.clone()));
-                }
+                candidates.push((slots.len(), *start, i, via));
                 break; // a method rarely appears twice in one table; the first slot is enough
             }
         }
     }
-    let (_, slot, via_thunk, slots) = chosen?;
+    // Largest table first (most structure to match on), a direct slot before a thunked one, lowest
+    // address to break ties.
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.3.cmp(&b.3)).then(a.1.cmp(&b.1)));
+    // Prefer a table whose constructor pins itself by a string, since that grounds it across a refactor
+    // the per-slot matcher cannot bridge (a shared method like a destructor sits in many sibling tables;
+    // only the one with an anchorable installer can be relocated when the structure drifts). Otherwise
+    // take the largest. Probe in priority order, bounded so a widely shared method does not explode.
+    let mut choice: Option<(usize, usize, bool, Option<StringAnchor>)> = None;
+    for &(_, start, slot, via) in candidates.iter().take(32) {
+        let inst = find_installer(img, &buf, (img.base + start) as u32);
+        let grounded = inst.is_some();
+        if choice.is_none() || grounded {
+            choice = Some((start, slot, via, inst));
+        }
+        if grounded {
+            break;
+        }
+    }
+    let (start, slot, via_thunk, installer) = choice?;
+    let slots = vts.iter().find(|(s, _)| *s == start).map(|(_, sl)| sl)?;
     let fingerprint = slots
         .iter()
         .map(|&sv| slot_mnemonics(img, sv, SLOT_WINDOW))
@@ -387,6 +519,7 @@ pub(super) fn make_vtable_anchor(img: &ImageInput, target_entry: usize) -> Optio
         via_thunk,
         fingerprint,
         weights,
+        installer,
     })
 }
 
@@ -431,12 +564,25 @@ pub(super) fn resolve_vtable_anchor(
             second = score;
         }
     }
-    let (slots, mapping) = best?;
-    // The target method must have a counterpart in the matched table (it was not removed in this build).
-    let cand_slot = mapping.get(anchor.slot).copied().flatten()?;
-    let &slot_rva = slots.get(cand_slot)?;
-    let (real, _) = follow_thunk(img, slot_rva);
-    Some((real, best_score, second))
+    // The structural match: the target method's counterpart in the best-aligned table.
+    let structural = best.and_then(|(slots, mapping)| {
+        let cs = mapping.get(anchor.slot).copied().flatten()?;
+        let &slot_rva = slots.get(cs)?;
+        Some((follow_thunk(img, slot_rva).0, best_score, second))
+    });
+    // A confident, unambiguous structural match wins and is exact (these are the gates the caller
+    // applies). When it is weak or ambiguous, the class refactored past the per-slot matcher: ground the
+    // table through its constructor's build-stable string instead, which names the exact table.
+    if let Some((r, a, runner)) = structural
+        && a >= 0.72
+        && a - runner >= 0.10
+    {
+        return Some((r, a, runner));
+    }
+    if let Some(real) = resolve_via_installer(img, anchor) {
+        return Some((real, 0.9, 0.0));
+    }
+    structural
 }
 
 #[cfg(test)]
@@ -927,7 +1073,10 @@ mod tests {
             if let Some(r) = crate::sigmaker::identity::resolve_string_anchor(&v951, &a) {
                 bridged += 1;
                 if bridged <= 12 {
-                    eprintln!("  slot {k} (fn 0x{fnrva:X}) anchors {:?} -> v95.1 0x{r:X}", a.text);
+                    eprintln!(
+                        "  slot {k} (fn 0x{fnrva:X}) anchors {:?} -> v95.1 0x{r:X}",
+                        a.text
+                    );
                 }
             }
         }
@@ -935,6 +1084,132 @@ mod tests {
             "string-anchorable sibling slots resolving in v95.1: {bridged} of {}",
             slots.len()
         );
+    }
+
+    // The gap closer (run with `--ignored`): the v91 slot-0 method (0x5BCCEF) is a pure virtual method
+    // whose class refactored at v95 past the per-slot matcher, with no string/import/caller of its own.
+    // Anchored from v91, it must now relocate into v95.1 and v95.5 through its constructor's string.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn constructor_grounding_bridges_the_v95_break() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let need = [
+            "GMS_v91.1_U_DEVM.exe",
+            "GMS_v95.1_U_DEVM.exe",
+            "GMS_v95.5_U_DEVM.exe",
+        ];
+        if need.iter().any(|n| !dir.join(n).exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        let i91 = FileImage::open(&dir.join(need[0])).unwrap();
+        let i951 = FileImage::open(&dir.join(need[1])).unwrap();
+        let i955 = FileImage::open(&dir.join(need[2])).unwrap();
+        let v91 = open_real(&i91, "v91");
+        let v951 = open_real(&i951, "v95.1");
+        let v955 = open_real(&i955, "v95.5");
+
+        let entry = crate::sigmaker::identity::enclosing_function(&v91, 0x5BCCEF);
+        let anchor = make_vtable_anchor(&v91, entry).expect("anchor the v91 method");
+        eprintln!(
+            "installer present: {} (slot {} of {})",
+            anchor.installer.is_some(),
+            anchor.slot,
+            anchor.fingerprint.len()
+        );
+        let mut pinned = 0;
+        for (img, name) in [(&v951, "v95.1"), (&v955, "v95.5")] {
+            match resolve_vtable_anchor(img, &anchor) {
+                Some((rva, a, r)) => {
+                    eprintln!("  {name}: 0x{rva:X}  agreement {a:.3} margin {:.3}", a - r);
+                    if a >= 0.72 && a - r >= 0.10 {
+                        pinned += 1;
+                    }
+                }
+                None => eprintln!("  {name}: declined"),
+            }
+        }
+        assert_eq!(
+            pinned, 2,
+            "constructor grounding should pin the method in both v95 builds"
+        );
+    }
+
+    // Probe (run with `--ignored`): can the target's vtable be GROUNDED in v95 through its installer
+    // (the constructor that writes `mov [obj], offset vtable`)? If an installer has a string or import
+    // anchor that resolves into v95.1, the v95 vtable address can be read from it and the table relocated
+    // even though its internal slot structure drifted past the matcher.
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn probe_vtable_installer_anchorability_v91_to_v95() {
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        if !dir.join("GMS_v91.1_U_DEVM.exe").exists() || !dir.join("GMS_v95.1_U_DEVM.exe").exists()
+        {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        let i91 = FileImage::open(&dir.join("GMS_v91.1_U_DEVM.exe")).unwrap();
+        let i951 = FileImage::open(&dir.join("GMS_v95.1_U_DEVM.exe")).unwrap();
+        let v91 = open_real(&i91, "v91");
+        let v951 = open_real(&i951, "v95.1");
+
+        let target_entry = crate::sigmaker::identity::enclosing_function(&v91, 0x5BCCEF);
+        let buf = whole_image(&v91);
+        let vts = vtables(&v91, &buf);
+        let (start, _) = vts
+            .iter()
+            .find(|(_, slots)| {
+                slots
+                    .iter()
+                    .any(|&sv| follow_thunk(&v91, sv).0 == target_entry)
+            })
+            .expect("the v91 vtable");
+        let vt_abs = (v91.base + start) as u32;
+        eprintln!("v91 target vtable @0x{start:X} (abs 0x{vt_abs:X})");
+
+        // Installers: code that mentions the vtable's absolute address as a 4-byte immediate/operand.
+        let mut installers: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for r in &v91.code_regions {
+            let bytes = read_region(v91.source, r.base, r.size);
+            for (i, w) in bytes.windows(4).enumerate() {
+                if u32::from_le_bytes([w[0], w[1], w[2], w[3]]) == vt_abs {
+                    installers.insert(crate::sigmaker::identity::enclosing_function(
+                        &v91,
+                        r.base + i - v91.base,
+                    ));
+                }
+            }
+        }
+        eprintln!("{} installer/constructor site(s)", installers.len());
+        let mut grounded = 0;
+        for inst in installers {
+            if let Some(sa) = crate::sigmaker::identity::make_string_anchor(&v91, inst)
+                && let Some(r) = crate::sigmaker::identity::resolve_string_anchor(&v951, &sa)
+            {
+                grounded += 1;
+                eprintln!(
+                    "  installer 0x{inst:X} STRING {:?} -> v95.1 0x{r:X}",
+                    sa.text
+                );
+                continue;
+            }
+            if let Some(ia) = crate::sigmaker::imports::make_import_anchor(&v91, inst)
+                && let Some(r) = crate::sigmaker::imports::resolve_import_anchor(&v951, &ia)
+            {
+                grounded += 1;
+                eprintln!(
+                    "  installer 0x{inst:X} IMPORTS {:?} -> v95.1 0x{r:X}",
+                    ia.names
+                );
+            }
+        }
+        eprintln!("installers that anchor into v95.1: {grounded}");
     }
 
     // `make_vtable_anchor` on real data (run with `--ignored`): a virtual method in the target table is
