@@ -7,7 +7,7 @@ use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, OpKind, Regist
 
 mod scoring;
 mod types;
-pub use scoring::{NegativeEvidence, apply_negative_corpus};
+pub use scoring::{NegativeEvidence, apply_negative_corpus, apply_negatives};
 pub use types::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

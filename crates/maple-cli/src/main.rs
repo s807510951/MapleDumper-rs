@@ -15,7 +15,7 @@ use maple_core::{
 };
 use maple_core::{
     FileImage, HoldoutResult, ImageInput, NegativeEvidence, NegativeHit, SigCandidate, SigOptions,
-    SigReport, TargetKind, TargetSpec, apply_negative_corpus, generate, holdout_validate,
+    SigReport, TargetKind, TargetSpec, apply_negatives, generate, holdout_validate,
     make_string_anchor, negative_corpus_hits,
 };
 
@@ -1539,10 +1539,7 @@ fn cmd_mksig(m: MksigArgs) -> Result<ExitKind, CliError> {
         && let Some(chosen) = report.chosen.as_mut()
     {
         let hit_counts: Vec<usize> = neg_hits.iter().map(|h| h.count).collect();
-        apply_negative_corpus(
-            chosen,
-            NegativeEvidence::from_hits(neg_paths.len(), &hit_counts),
-        );
+        apply_negatives(chosen, neg_paths.len(), &hit_counts);
     }
 
     if m.json || m.json_out.is_some() {
