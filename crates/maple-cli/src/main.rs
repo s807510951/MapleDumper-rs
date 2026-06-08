@@ -1011,7 +1011,6 @@ fn arch_str(arch: Arch) -> &'static str {
     }
 }
 
-
 fn kind_str(kind: TargetKind) -> &'static str {
     match kind {
         TargetKind::Code => "code",
