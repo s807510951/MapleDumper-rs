@@ -385,7 +385,7 @@ fn run_scan(
         scanner_version: maple_core::VERSION.to_string(),
     };
     {
-        let mut conn = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut conn = crate::state::lock_db(db);
         if let Err(e) = history::insert_scan(&mut conn, &record, &new_findings) {
             // Surface the failure to the user instead of only logging it: the scan still produced
             // results, but it was not persisted to history, and silently dropping that reads as a

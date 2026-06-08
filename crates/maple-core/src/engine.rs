@@ -835,45 +835,6 @@ fn scan_serial(bufs: &[(usize, Vec<u8>)], compiled: &[CompiledPat]) -> (u128, Ve
     (t.elapsed().as_millis(), found)
 }
 
-fn scan_parallel(
-    bufs: &[(usize, Vec<u8>)],
-    compiled: &[CompiledPat],
-    block: usize,
-    overlap: usize,
-) -> u128 {
-    let mut units: Vec<(usize, usize, usize)> = Vec::new();
-    for (bi, (_, data)) in bufs.iter().enumerate() {
-        let mut off = 0;
-        while off < data.len() {
-            let accept = block.min(data.len() - off);
-            units.push((bi, off, accept));
-            off += accept;
-        }
-    }
-    let t = Instant::now();
-    let hits: usize = units
-        .par_iter()
-        .map(|&(bi, start, accept)| {
-            let data = &bufs[bi].1;
-            let end = (start + accept + overlap).min(data.len());
-            let slice = &data[start..end];
-            compiled
-                .iter()
-                .filter_map(|c| c.cp.as_ref())
-                .filter(|cp| slice.len() >= cp.len())
-                .map(|cp| {
-                    scanner::find_all(slice, cp)
-                        .iter()
-                        .filter(|&&o| o < accept)
-                        .count()
-                })
-                .sum::<usize>()
-        })
-        .sum();
-    black_box(hits);
-    t.elapsed().as_millis()
-}
-
 fn resolve_pass<S: MemorySource>(
     source: &S,
     module_base: usize,
@@ -947,7 +908,6 @@ pub struct ProfileReport {
     pub patterns: usize,
     pub read_ms: Vec<(usize, u128)>,
     pub scan_serial_ms: u128,
-    pub scan_parallel_ms: u128,
     pub matches: usize,
     pub resolve_ms: u128,
     pub call_hits: usize,
@@ -970,11 +930,6 @@ where
     const BLOCK: usize = 1 << 18;
 
     let compiled = compile_patterns(patterns);
-    let max_len = compiled
-        .iter()
-        .filter_map(|c| c.cp.as_ref().map(CompiledPattern::len))
-        .max()
-        .unwrap_or(1);
     let bytes: u64 = regions.iter().map(|r| r.size as u64).sum();
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
 
@@ -986,8 +941,6 @@ where
         .collect();
 
     let (scan_serial_ms, found) = scan_serial(&bufs, &compiled);
-
-    let scan_parallel_ms = scan_parallel(&bufs, &compiled, BLOCK, max_len.max(1));
 
     let (resolve_ms, call_hits) = resolve_pass(
         source,
@@ -1041,7 +994,6 @@ where
         patterns: patterns.len(),
         read_ms,
         scan_serial_ms,
-        scan_parallel_ms,
         matches: found.len(),
         resolve_ms,
         call_hits,
@@ -1082,6 +1034,30 @@ mod tests {
                 .rows
                 .iter()
                 .all(|r| r.status == FindingStatus::FoundUnique)
+        );
+    }
+
+    #[test]
+    fn profile_match_count_equals_the_real_scan() {
+        // ARCH-4 / PERF-1: the profiler must measure the shipping path, so its match count has to
+        // equal what scan() finds for the same input (the divergent scan_parallel micro-bench that
+        // counted matches a second, different way is gone).
+        let base = 0x1000usize;
+        let mut data = vec![0u8; 64];
+        data[0x10..0x14].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        data[0x20..0x27].copy_from_slice(&[0x48, 0x8D, 0x0D, 0x09, 0x00, 0x00, 0x00]);
+        let source = BufferSource::new(base, data);
+        let regions = [Region { base, size: 64 }];
+        let patterns = parse_patterns("Foo = DE AD BE EF\nBar_PTR = 48 8D 0D ? ? ? ?", Arch::X64);
+        let scanned: usize = scan(&source, base, 64, &regions, &patterns, Arch::X64)
+            .rows
+            .iter()
+            .map(|r| r.matches)
+            .sum();
+        let profiled = profile(&source, base, 64, &regions, &patterns, Arch::X64).matches;
+        assert_eq!(
+            profiled, scanned,
+            "profiler match count must equal the real scan"
         );
     }
 
