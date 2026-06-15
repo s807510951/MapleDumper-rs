@@ -475,10 +475,7 @@ document.querySelectorAll("#export-menu button").forEach((b) =>
   })
 );
 
-$("out-copy").addEventListener("click", async () => {
-  await navigator.clipboard.writeText($("output-text").textContent);
-  toast(t("toast.copied"));
-});
+$("out-copy").addEventListener("click", () => copyText($("output-text").textContent));
 $("out-save").addEventListener("click", async () => {
   try {
     const saved = await invoke("save_report_file", {
