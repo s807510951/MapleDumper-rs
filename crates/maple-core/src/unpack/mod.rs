@@ -7,6 +7,7 @@
 //! [`clean_bytes`] reproduces the `proto/unpack_clean.py` oracle byte for byte.
 
 mod dump;
+mod native;
 mod sha256;
 mod verify;
 
@@ -14,6 +15,7 @@ use std::io;
 use std::path::Path;
 
 pub use dump::locate_unlicense;
+pub use native::{locate_native_dumper, run_native_dumper};
 pub use verify::{VerifyReport, verify_bytes};
 
 const IDATA: u32 = 0x40;
@@ -198,7 +200,7 @@ impl CleanOptions {
 }
 
 /// What the clean pass did, for the report card and CLI summary.
-#[derive(Clone, Debug, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CleanSummary {
     pub exception_repointed: bool,
     pub cert_cleared: bool,
@@ -239,7 +241,7 @@ pub enum Progress<'a> {
 
 /// The end-to-end result. `output` is `None` when the gates failed: in that case no
 /// binary is written, so the caller can report the failure without a broken artifact.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UnpackReport {
     pub input: String,
     pub output: Option<String>,

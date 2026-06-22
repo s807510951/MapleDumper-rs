@@ -1,10 +1,17 @@
 //! The Unpack command: drive the maple-core pipeline (dump with unlicense, then the static
 //! clean, then the gates) and stream stage and dumper-line progress to the panel as
 //! `unpack-progress` events. The binary is written by the engine only when every gate passes.
+//!
+//! The `native` path drives the bundled `maple-unpack-native` dumper (a native Frida + Unicorn port
+//! of unlicense) through the engine's `run_native_dumper`. It emits the same `UnpackReport`, so the
+//! results card and progress events are identical to the unlicense path with no second report shape
+//! to maintain.
 
 use std::path::Path;
 
-use maple_core::{CleanOptions, Progress, Stage, UnpackReport, clean_to_path, unpack_to_path};
+use maple_core::{
+    CleanOptions, Progress, Stage, UnpackReport, clean_to_path, run_native_dumper, unpack_to_path,
+};
 use tauri::Emitter;
 
 fn stage_str(s: Stage) -> &'static str {
@@ -24,6 +31,18 @@ enum UnpackEvent {
     Line { line: String },
 }
 
+fn emit_progress(app: &tauri::AppHandle, p: Progress) {
+    let event = match p {
+        Progress::Stage(s) => UnpackEvent::Stage {
+            stage: stage_str(s),
+        },
+        Progress::Line(l) => UnpackEvent::Line {
+            line: l.to_string(),
+        },
+    };
+    let _ = app.emit("unpack-progress", event);
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn unpack_binary(
@@ -35,17 +54,36 @@ pub async fn unpack_binary(
     unlicense: Option<String>,
     unbind_iat: bool,
     zero_timestamp: bool,
+    native: bool,
+    native_bin: Option<String>,
 ) -> Result<UnpackReport, String> {
     if !Path::new(&input).is_file() {
         return Err(format!("input not found: {input}"));
     }
+    if output.trim().is_empty() {
+        return Err("no output path chosen".to_string());
+    }
+
+    if native {
+        let app = app.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            let mut on = |p: Progress| emit_progress(&app, p);
+            run_native_dumper(
+                Path::new(&input),
+                Path::new(&output),
+                native_bin.as_deref().map(Path::new),
+                &mut on,
+            )
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
     if let Some(p) = &packed
         && !Path::new(p).is_file()
     {
         return Err(format!("packed reference not found: {p}"));
-    }
-    if output.trim().is_empty() {
-        return Err("no output path chosen".to_string());
     }
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -53,17 +91,7 @@ pub async fn unpack_binary(
             unbind_iat,
             zero_timestamp,
         };
-        let mut on = |p: Progress| {
-            let event = match p {
-                Progress::Stage(s) => UnpackEvent::Stage {
-                    stage: stage_str(s),
-                },
-                Progress::Line(l) => UnpackEvent::Line {
-                    line: l.to_string(),
-                },
-            };
-            let _ = app.emit("unpack-progress", event);
-        };
+        let mut on = |p: Progress| emit_progress(&app, p);
         let result = if clean_only {
             clean_to_path(
                 Path::new(&input),

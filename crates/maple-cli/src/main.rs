@@ -244,6 +244,12 @@ struct UnpackArgs {
     /// Path to unlicense.exe (default: beside the packed exe, then PATH)
     #[arg(long, value_name = "EXE")]
     unlicense: Option<PathBuf>,
+    /// Use the bundled native unpacker (maple-unpack-native) for the dump step instead of unlicense
+    #[arg(long)]
+    native: bool,
+    /// Path to maple-unpack-native (default: beside this exe, then PATH)
+    #[arg(long, value_name = "EXE")]
+    native_bin: Option<PathBuf>,
     /// Keep the dump host's bound import addresses instead of unbinding the IAT
     #[arg(long)]
     keep_bound_iat: bool,
@@ -1058,12 +1064,43 @@ fn print_unpack_report(r: &UnpackReport) {
     );
 }
 
+/// Drive the bundled native unpacker for the full packed-to-min flow through the engine, which runs
+/// the dump, the static clean, and the verification gates and writes the output only if every gate
+/// passes. Routed through `maple_core` so the CLI and GUI share one locate-spawn-parse path.
+fn cmd_unpack_native(a: &UnpackArgs) -> Result<ExitKind, CliError> {
+    let mut on = |p: Progress| match p {
+        Progress::Stage(s) => eprintln!("[unpack] {}", stage_label(s)),
+        Progress::Line(l) => eprintln!("    {l}"),
+    };
+    let report = maple_core::run_native_dumper(&a.input, &a.out, a.native_bin.as_deref(), &mut on)
+        .map_err(unpack_err)?;
+    if a.json {
+        println!("{}", to_json_pretty(&report)?);
+    } else {
+        print_unpack_report(&report);
+    }
+    if !report.gates_pass {
+        return Err(CliError::new(
+            ExitKind::Unresolved,
+            "verification gates failed; no binary was written",
+        ));
+    }
+    Ok(if report.verify.warnings.is_empty() {
+        ExitKind::Success
+    } else {
+        ExitKind::SuccessWithWarnings
+    })
+}
+
 fn cmd_unpack(a: UnpackArgs) -> Result<ExitKind, CliError> {
     if !a.input.is_file() {
         return Err(CliError::new(
             ExitKind::InvalidInput,
             format!("input not found: {}", a.input.display()),
         ));
+    }
+    if a.native {
+        return cmd_unpack_native(&a);
     }
     if let Some(p) = &a.packed
         && !p.is_file()
